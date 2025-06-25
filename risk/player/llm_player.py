@@ -4,153 +4,208 @@ from risk.llm.interface import LLMInterface
 # from risk.errors.game_master import *
 
 # Placeholder for serialize_game_state, will be moved or properly defined later
+def get_territory_continent(board_continents: dict, territory_name: str) -> str:
+    """Helper function to find the continent of a territory."""
+    for continent_name, territories_in_continent in board_continents.items():
+        if territory_name in territories_in_continent:
+            return continent_name
+    return "Unknown" # Should not happen in a consistent board state
+
 def serialize_game_state(game_master, player_perspective) -> dict:
     """
-    Serializes the game state for the LLM.
-    This is a basic placeholder and will be significantly expanded in Phase 2.
+    Serializes the game state for the LLM, providing a comprehensive view.
     """
     if not game_master or not player_perspective:
-        # This basic check might be useful for early testing before game_master is fully mocked
-        return {"error": "Game master or player perspective not available"}
+        return {"error": "Game master or player perspective not available for serialization."}
 
-    current_phase = "unknown"
-    # hasattr check is a safe way if game_master might not always have 'phase' (e.g. in minimal mocks)
-    if hasattr(game_master, 'phase'):
-        current_phase = game_master.phase
+    current_player_obj = game_master.current_player()
+    current_player_name = current_player_obj.name if current_player_obj else "Unknown"
+    current_phase = game_master.phase if hasattr(game_master, 'phase') else "UNDEFINED"
 
-    player_territories_data = {}
-    if hasattr(game_master, 'player_territories'):
-        try:
-            territories = game_master.player_territories(player_perspective)
-            # Ensure territories is a dict as expected by .keys()
-            if isinstance(territories, dict):
-                 player_territories_data = list(territories.keys())
-            else: # Basic fallback if the structure isn't a dict (e.g. list of territory objects)
-                player_territories_data = [str(t) for t in territories] # Or t.name if they are objects
-        except Exception as e:
-            # Log or handle error if player_territories call fails
-            print(f"Error accessing player territories: {e}")
-            player_territories_data = {"error": str(e)}
+    # Your Status
+    owned_territories_details = []
+    # Ensure player_owned_territories_map is a dict, not a list of keys
+    player_owned_territories_map = game_master.player_territories(player_perspective)
+    if isinstance(player_owned_territories_map, dict):
+        for terr_name, terr_obj in player_owned_territories_map.items():
+            owned_territories_details.append({
+                "name": terr_obj.name,
+                "armies": terr_obj.armies,
+                "continent": get_territory_continent(game_master.board.continents, terr_obj.name),
+                "neighbors": list(terr_obj.neighbours.keys())
+            })
+    else: # Fallback if it's not a map (e.g. during early test mocking)
+        print(f"Warning: player_territories for {player_perspective.name} was not a dict, attempting to adapt.")
+        # Add handling for list of territory objects if that's a possible scenario from mocks
+        # For now, this will result in empty owned_territories_details if not a dict.
 
+
+    your_status = {
+        "name": player_perspective.name,
+        "reserves": player_perspective.reserves,
+        "territories_owned": owned_territories_details,
+        "cards": [] # Placeholder for now
+    }
+
+    # Board State
+    all_territories_details = []
+    all_territories_map = game_master.board.territories()
+    for terr_name, terr_obj in all_territories_map.items():
+        owner_name = terr_obj.owner.name if terr_obj.owner else None
+        all_territories_details.append({
+            "name": terr_obj.name,
+            "owner": owner_name,
+            "armies": terr_obj.armies,
+            "continent": get_territory_continent(game_master.board.continents, terr_obj.name),
+            "neighbors": list(terr_obj.neighbours.keys())
+        })
+
+    # Players
+    players_details = []
+    for p in game_master.players:
+        p_territories_count = len(game_master.player_territories(p))
+
+        players_details.append({
+            "name": p.name,
+            "territory_count": p_territories_count,
+            "total_armies": game_master.player_total_armies(p),
+            "cards_count": 0
+        })
+
+    chat_history = {
+        "global": [],
+        "private": []
+    }
 
     return {
-        "current_phase": current_phase,
-        "my_territories": player_territories_data,
-        "my_reserves": player_perspective.reserves if hasattr(player_perspective, 'reserves') else 0,
-        # Add more basic states as needed for initial LLM calls
+        "current_turn": {
+            "player_name": current_player_name,
+            "phase": current_phase
+        },
+        "your_status": your_status,
+        "board_state": all_territories_details,
+        "players": players_details,
+        "chat_history": chat_history
     }
 
 
 class LLMRiskPlayer(AbstractRiskPlayer):
-    """
-    A Risk player AI controlled by a Large Language Model.
-    """
     def __init__(self, name: str, llm_interface: LLMInterface):
         super().__init__(name)
         self.llm_interface = llm_interface
-        self.is_bot = True # LLM players are bots
+        self.is_bot = True
+
+        self.system_prompt_part = (
+            "You are a grand strategist and a master of diplomacy, playing the board game Risk. "
+            "Your objective is to control all 42 territories on the map. "
+            "All responses from you MUST be in a valid JSON format. "
+            "The top-level JSON object must contain three keys: `thoughts`, `actions`, and `chat`. "
+            "`thoughts`: Your detailed strategic analysis and justification for your moves. "
+            "`actions`: A list of action objects specific to the current game phase. "
+            "`chat`: An object for communication (`{\"global\": \"msg\", \"private\": [{\"to\": \"player\", \"message\": \"msg\"}]}`)."
+        )
+
+    def _get_llm_decision(self, game_master, task_prompt_part: str, current_phase_override: str = None) -> dict:
+        """Helper to construct full prompt and get LLM decision."""
+        # Override game_master.phase for serialization if needed (e.g. for setup phases)
+        original_phase = None
+        if current_phase_override and hasattr(game_master, 'phase'):
+            original_phase = game_master.phase
+            game_master.phase = current_phase_override
+
+        game_state_dict = serialize_game_state(game_master, self)
+
+        if original_phase is not None and hasattr(game_master, 'phase'): # Restore original phase
+            game_master.phase = original_phase
+
+        full_prompt = f"{self.system_prompt_part}\n\nCURRENT_SITUATION_AND_TASK:\n{task_prompt_part}\n\nGAME_STATE:\n{game_state_dict}"
+
+        llm_response = self.llm_interface.get_decision(full_prompt, game_state_dict)
+
+        print(f"LLM ({self.name}) thoughts: {llm_response.get('thoughts', 'N/A')}")
+        if llm_response.get("chat"):
+            if llm_response["chat"].get("global"):
+                print(f"LLM ({self.name}) global chat: {llm_response['chat']['global']}")
+            if llm_response["chat"].get("private"):
+                private_chats = llm_response["chat"]["private"]
+                if isinstance(private_chats, list):
+                    for private_msg in private_chats:
+                        if isinstance(private_msg, dict):
+                            print(f"LLM ({self.name}) private chat to {private_msg.get('to')}: {private_msg.get('message')}")
+                        else:
+                            print(f"LLM ({self.name}) malformed private chat entry: {private_msg}")
+        return llm_response
+
 
     def reinforce(self, game_master):
-        """
-        Handles the reinforcement phase for the LLM player.
-        The LLM decides where to place armies.
-        """
         print(f"{self.name}: Entering reinforcement phase with {self.reserves} reserves.")
         if self.reserves <= 0:
             print(f"{self.name}: No reserves to deploy.")
             return
 
-        game_state_dict = serialize_game_state(game_master, self)
-        prompt = (
-            f"You are {self.name}, a Risk player. It is the REINFORCE phase. "
-            f"You have {self.reserves} reserve armies to deploy. "
-            "Analyze your territories and the board state to decide where to place your armies. "
-            "Provide your decisions in the specified JSON format under the 'actions' key, like: "
-            """{"actions": [{"command": "add", "armies": <number>, "to": "<territory_name>"}]}"""
-            "You can specify multiple 'add' commands if you want to distribute armies across territories."
+        task_prompt = (
+            f"It is your turn, {self.name}. Game phase: REINFORCE. "
+            f"You have {self.reserves} reserve armies. Deploy them to your territories. "
+            "Specify reinforcements using 'add' commands in 'actions'. "
+            "Example: `\"actions\": [{\"command\": \"add\", \"armies\": 3, \"to\": \"alaska\"}]`"
         )
-
-        llm_response = self.llm_interface.get_decision(prompt, game_state_dict)
+        llm_response = self._get_llm_decision(game_master, task_prompt)
 
         actions_taken_count = 0
-        if llm_response and "actions" in llm_response:
+        if llm_response and "actions" in llm_response and isinstance(llm_response["actions"], list):
             for action in llm_response["actions"]:
-                if self.reserves <= 0:
-                    print(f"{self.name}: All reserves deployed or no more valid actions.")
-                    break
-                if action.get("command") == "add":
+                if self.reserves <= 0: break
+                if isinstance(action, dict) and action.get("command") == "add":
                     try:
                         territory_name = action["to"]
                         armies_to_add = int(action["armies"])
+                        if armies_to_add <= 0: continue
 
-                        if armies_to_add <= 0:
-                            print(f"{self.name}: Invalid army count ({armies_to_add}) for {territory_name}. Skipping.")
-                            continue
-
-                        # Ensure we don't deploy more than available reserves overall
-                        # or more than the player wants for this specific action if it's less than total reserves
                         actual_armies_to_deploy = min(armies_to_add, self.reserves)
-
-                        print(f"{self.name}: Attempting to deploy {actual_armies_to_deploy} armies to {territory_name}.")
-                        # TODO: Add proper error handling from game_master.player_add_army
+                        print(f"{self.name}: Attempting to deploy {actual_armies_to_deploy} to {territory_name}.")
                         game_master.player_add_army(self, territory_name, actual_armies_to_deploy)
-                        # self.reserves is updated by game_master.player_add_army
-                        print(f"{self.name}: Successfully deployed to {territory_name}. Reserves left: {self.reserves}")
+                        print(f"{self.name}: Deployed to {territory_name}. Reserves left: {self.reserves}")
                         actions_taken_count +=1
-                    except KeyError:
-                        print(f"{self.name}: Malformed 'add' action from LLM: {action}. Missing 'to' or 'armies'.")
-                    except ValueError:
-                        print(f"{self.name}: Invalid army count in action from LLM: {action}.")
-                    except Exception as e: # Catching general exceptions from player_add_army (e.g. TerritoryNotOwned)
-                        print(f"{self.name}: Error deploying armies to {action.get('to', 'unknown territory')} as per LLM: {e}")
+                    except (KeyError, ValueError) as e:
+                        print(f"{self.name}: Malformed 'add' action: {action}. Error: {e}")
+                    except Exception as e:
+                        print(f"{self.name}: Error deploying to {action.get('to', 'unknown')}: {e}")
 
-        if actions_taken_count == 0 :
-            print(f"{self.name}: LLM provided no valid 'add' actions, or ran out of reserves. Reinforcement might be incomplete if reserves > 0.")
+        if actions_taken_count == 0 and self.reserves > 0:
+            print(f"{self.name}: LLM provided no valid 'add' actions. {self.reserves} reserves remain.")
 
-        # Fallback: If LLM fails to deploy all reserves, distribute remaining ones (e.g., first owned territory or randomly)
-        # This is a safety net. Ideally, the LLM and prompt engineering should handle full deployment.
-        if self.reserves > 0:
-            print(f"{self.name}: {self.reserves} reserves remaining after LLM actions. Attempting fallback deployment.")
+        if self.reserves > 0: # Fallback
+            print(f"{self.name}: {self.reserves} reserves remaining. Attempting fallback deployment.")
             player_territories = game_master.player_territories(self)
-            if player_territories:
-                # Simple fallback: add all remaining to the first territory.
-                # A more sophisticated fallback could distribute them.
+            if player_territories and isinstance(player_territories, dict) and len(player_territories) > 0 :
                 fallback_territory = list(player_territories.keys())[0]
                 try:
-                    print(f"{self.name}: Fallback: Deploying remaining {self.reserves} armies to {fallback_territory}.")
+                    print(f"{self.name}: Fallback: Deploying {self.reserves} to {fallback_territory}.")
                     game_master.player_add_army(self, fallback_territory, self.reserves)
                 except Exception as e:
-                    print(f"{self.name}: Error during fallback deployment to {fallback_territory}: {e}")
+                    print(f"{self.name}: Error during fallback deployment: {e}")
             else:
-                print(f"{self.name}: No territories to deploy remaining reserves. This shouldn't happen if player is still in game.")
-        print(f"{self.name}: Reinforcement phase complete. Reserves left: {self.reserves}")
+                print(f"{self.name}: No territories for fallback deployment or territories not in expected dict format.")
+        print(f"{self.name}: Reinforcement complete. Reserves left: {self.reserves}")
 
 
     def attack(self, game_master):
-        """
-        Handles the attack phase for the LLM player.
-        The LLM decides which territories to attack, if any.
-        """
         print(f"{self.name}: Entering attack phase.")
-        game_state_dict = serialize_game_state(game_master, self)
-        prompt = (
-            f"You are {self.name}, a Risk player. It is the ATTACK phase. "
-            "Analyze the board state to decide if and where to attack. "
-            "Your goal is to conquer territories. Consider army counts and strategic positions. "
-            "Provide your decisions in the specified JSON format under the 'actions' key, like: "
-            """{"actions": [{"command": "attack", "from": "<your_territory>", "to": "<enemy_territory>"}]}"""
-            "You can specify multiple 'attack' commands. If you don't want to attack, provide an empty list for 'actions'."
-            "After a successful attack, you must decide how many armies to move into the conquered territory (at least 1, up to all but 1 from the attacking territory)."
-            "For this, use the 'move_after_attack' command: "
-            """{"command": "move_after_attack", "from": "<origin_territory>", "to": "<conquered_territory>", "armies": <number>}"""
-            "The 'move_after_attack' action should immediately follow the 'attack' action that prompted it in the sequence if the LLM is to decide this."
-            "Alternatively, the system can handle a default move if this action is not provided after a successful attack."
+        task_prompt = (
+            f"It is your turn, {self.name}. Game phase: ATTACK. "
+            "Decide if and where to attack. "
+            "Actions: `{\"command\": \"attack\", \"from\": \"A\", \"to\": \"B\"}`. "
+            "If attack succeeds, follow with: `{\"command\": \"move_after_attack\", \"from\": \"A\", \"to\": \"B\", \"armies\": N}`. "
+            "Move N armies (min 1, leave 1 in origin). Empty 'actions' list to skip attacking."
         )
+        llm_response = self._get_llm_decision(game_master, task_prompt)
 
-        llm_response = self.llm_interface.get_decision(prompt, game_state_dict)
+        if llm_response and "actions" in llm_response and isinstance(llm_response["actions"], list):
+            for action_index, action in enumerate(llm_response["actions"]):
+                if not isinstance(action, dict):
+                    print(f"{self.name}: Invalid action format: {action}. Skipping.")
+                    continue
 
-        if llm_response and "actions" in llm_response:
-            for action_index, action in enumerate(llm_response["actions"]): # Use enumerate to get index
                 if action.get("command") == "attack":
                     try:
                         origin_name = action["from"]
@@ -158,53 +213,46 @@ class LLMRiskPlayer(AbstractRiskPlayer):
 
                         origin_territory = game_master.board.territories().get(origin_name)
                         if not origin_territory or origin_territory.owner != self or origin_territory.armies < 2:
-                            print(f"{self.name}: Cannot attack from {origin_name} (not owned, or < 2 armies). Skipping attack on {target_name}.")
+                            print(f"{self.name}: Invalid attack: {origin_name} ({origin_territory.armies if origin_territory else 'N/A'}) to {target_name}. Skipping.")
                             continue
 
-                        print(f"{self.name}: Attempting to attack from {origin_name} to {target_name}.")
+                        print(f"{self.name}: Attempting attack: {origin_name} to {target_name}.")
                         success = game_master.player_attack(self, origin_name, target_name)
 
                         if success:
-                            print(f"{self.name}: Successfully conquered {target_name} from {origin_name}!")
-                            self._handle_move_after_attack(game_master, origin_name, target_name, llm_response, action_index) # Pass action_index
+                            print(f"{self.name}: Conquered {target_name} from {origin_name}!")
+                            self._handle_move_after_attack(game_master, origin_name, target_name, llm_response, action_index)
                         else:
-                            print(f"{self.name}: Attack from {origin_name} to {target_name} failed.")
-                    except KeyError:
-                        print(f"{self.name}: Malformed 'attack' action from LLM: {action}.")
+                            print(f"{self.name}: Attack {origin_name} to {target_name} failed.")
+                    except KeyError as e:
+                        print(f"{self.name}: Malformed 'attack' action: {action}. Missing key: {e}")
                     except Exception as e:
-                        print(f"{self.name}: Error during attack from {action.get('from', 'unknown')} to {action.get('to', 'unknown')}: {e}")
+                        print(f"{self.name}: Error during attack {action.get('from', '?')}->{action.get('to', '?')}: {e}")
         else:
-            print(f"{self.name}: LLM provided no attack actions or response was malformed.")
-
+            print(f"{self.name}: No attack actions or malformed response.")
         print(f"{self.name}: Attack phase complete.")
 
-    def _handle_move_after_attack(self, game_master, origin_name, target_name, llm_response, attack_action_index): # Added attack_action_index
-        """
-        Handles moving armies after a successful attack.
-        The LLM can specify this, or a default logic is applied.
-        """
+    def _handle_move_after_attack(self, game_master, origin_name, target_name, llm_response, attack_action_index):
         armies_to_move = None
-        # Check if LLM provided a 'move_after_attack' action immediately following this attack
         if attack_action_index + 1 < len(llm_response["actions"]):
             next_action = llm_response["actions"][attack_action_index + 1]
-            if next_action.get("command") == "move_after_attack" and \
+            if isinstance(next_action, dict) and \
+               next_action.get("command") == "move_after_attack" and \
                next_action.get("from") == origin_name and \
                next_action.get("to") == target_name:
                 try:
                     armies_to_move = int(next_action["armies"])
-                    print(f"{self.name}: LLM specified moving {armies_to_move} armies to {target_name}.")
-                except (ValueError, KeyError):
-                    print(f"{self.name}: LLM provided invalid 'move_after_attack' action: {next_action}. Using default.")
+                    print(f"{self.name}: LLM move {armies_to_move} to {target_name}.")
+                except (ValueError, KeyError) as e:
+                    print(f"{self.name}: Invalid 'move_after_attack' action ({next_action}): {e}. Defaulting.")
                     armies_to_move = None
 
-        origin_territory = game_master.board.territories().get(origin_name) # Get latest state
-
-        if not origin_territory or origin_territory.owner != self : # Check if still owned (e.g. if it was part of a chain reaction not handled here)
-            print(f"{self.name}: Origin territory {origin_name} no longer owned or accessible. Cannot move armies.")
+        origin_territory = game_master.board.territories().get(origin_name)
+        if not origin_territory or origin_territory.owner != self :
+            print(f"{self.name}: Origin {origin_name} not owned/accessible for move. Skipping.")
             return
-
         if origin_territory.armies <= 1:
-            print(f"{self.name}: Only 1 army left in {origin_name}, cannot move armies to {target_name}.")
+            print(f"{self.name}: Only 1 army in {origin_name}. Cannot move. Skipping.")
             return
 
         min_move = 1
@@ -213,41 +261,35 @@ class LLMRiskPlayer(AbstractRiskPlayer):
         if armies_to_move is None:
             armies_to_move = max(min_move, min(max_move, (origin_territory.armies -1) // 2))
             if armies_to_move == 0 and max_move > 0 : armies_to_move = min_move
-            print(f"{self.name}: Using default logic: moving {armies_to_move} armies to {target_name}.")
+            print(f"{self.name}: Default logic: move {armies_to_move} to {target_name}.")
 
-        armies_to_move = max(min_move, min(armies_to_move, max_move)) # Clamp to valid range
+        armies_to_move = max(min_move, min(armies_to_move, max_move))
 
         if armies_to_move > 0 :
             try:
                 game_master.player_move_armies(self, origin_name, target_name, armies_to_move)
-                print(f"{self.name}: Successfully moved {armies_to_move} armies from {origin_name} to {target_name}.")
+                print(f"{self.name}: Moved {armies_to_move} from {origin_name} to {target_name}.")
             except Exception as e:
-                print(f"{self.name}: Error moving armies after attack from {origin_name} to {target_name}: {e}")
+                print(f"{self.name}: Error moving armies {origin_name}->{target_name}: {e}")
         else:
-            print(f"{self.name}: No armies to move from {origin_name} to {target_name} after adjustments (available: {origin_territory.armies}).")
+            print(f"{self.name}: No armies to move from {origin_name} (available: {origin_territory.armies}).")
 
 
     def fortify(self, game_master):
-        """
-        Handles the fortification phase for the LLM player.
-        The LLM decides which territories to move armies between, if any.
-        One fortification move is allowed per turn.
-        """
         print(f"{self.name}: Entering fortification phase.")
-        game_state_dict = serialize_game_state(game_master, self)
-        prompt = (
-            f"You are {self.name}, a Risk player. It is the FORTIFY phase. "
-            "You can make one move to fortify a position by moving armies between two of your connected territories. "
-            "Analyze the board state to decide if and what fortification move to make. "
-            "Provide your decision in the specified JSON format under the 'actions' key, like: "
-            """{"actions": [{"command": "fortify", "from": "<your_territory_A>", "to": "<your_territory_B>", "with": <number_of_armies>}]}"""
-            "If you don't want to fortify, provide an empty list for 'actions' or an action with 'with': 0."
+        task_prompt = (
+            f"It is your turn, {self.name}. Game phase: FORTIFY. "
+            "Make one move between connected territories if desired. "
+            "Action: `{\"command\": \"fortify\", \"from\": \"A\", \"to\": \"B\", \"with\": N}`. "
+            "Empty 'actions' or 'with: 0' to skip. Only first valid fortify action is used."
         )
+        llm_response = self._get_llm_decision(game_master, task_prompt)
 
-        llm_response = self.llm_interface.get_decision(prompt, game_state_dict)
-
-        if llm_response and "actions" in llm_response:
+        if llm_response and "actions" in llm_response and isinstance(llm_response["actions"], list):
             for action in llm_response["actions"]:
+                if not isinstance(action, dict):
+                    print(f"{self.name}: Invalid action format: {action}. Skipping.")
+                    continue
                 if action.get("command") == "fortify":
                     try:
                         origin_name = action["from"]
@@ -260,94 +302,97 @@ class LLMRiskPlayer(AbstractRiskPlayer):
 
                         origin_territory = game_master.player_territories(self).get(origin_name)
                         if not origin_territory or origin_territory.armies <= armies_to_move :
-                            print(f"{self.name}: Cannot fortify from {origin_name} (not enough armies or not owned). Skipping.")
+                            print(f"{self.name}: Cannot fortify from {origin_name} (armies: {origin_territory.armies if origin_territory else 'N/A'}, needed: {armies_to_move}). Skipping.")
                             break
 
-                        print(f"{self.name}: Attempting to fortify from {origin_name} to {target_name} with {armies_to_move} armies.")
+                        print(f"{self.name}: Attempting fortify: {origin_name} to {target_name} with {armies_to_move}.")
                         game_master.player_move_armies(self, origin_name, target_name, armies_to_move)
-                        print(f"{self.name}: Successfully fortified from {origin_name} to {target_name}.")
-                        break
-                    except KeyError:
-                        print(f"{self.name}: Malformed 'fortify' action from LLM: {action}.")
-                    except ValueError:
-                        print(f"{self.name}: Invalid army count in 'fortify' action from LLM: {action}.")
+                        print(f"{self.name}: Fortified {origin_name} to {target_name}.")
+                    except KeyError as e:
+                        print(f"{self.name}: Malformed 'fortify' action: {action}. Missing key: {e}")
+                    except ValueError as e:
+                        print(f"{self.name}: Invalid army count in 'fortify' ({action}): {e}.")
                     except Exception as e:
                         print(f"{self.name}: Error during fortification: {e}")
                     break
         else:
-            print(f"{self.name}: LLM provided no fortify actions or response was malformed.")
-
+            print(f"{self.name}: No fortify actions or malformed response.")
         print(f"{self.name}: Fortification phase complete.")
 
     def choose_territory(self, available_territories_map: dict) -> str:
-        """
-        Handles initial territory selection for the LLM player.
-        """
         print(f"{self.name}: Choosing initial territory.")
+        current_available_names = list(available_territories_map.keys())
+
+        # Construct a minimal game_state for this specific early phase
+        # serialize_game_state might be too complex or rely on a fully setup game_master
         game_state_for_selection = {
             "current_phase": "INITIAL_TERRITORY_SELECTION",
-            "available_territories": list(available_territories_map.keys()),
-            "board_state": {name: {"owner": None, "armies": 0} for name in available_territories_map.keys()}
+            "your_name": self.name,
+            "available_territories": current_available_names,
+            "board_overview": {name: "unclaimed" for name in current_available_names}
+            # Add more details if other players' picks are known and relevant:
+            # "all_players_picks": [{"player_name": "P1", "picked": "Alaska"}, ...]
         }
 
-        prompt = (
-            f"You are {self.name}, a Risk player. It is the initial territory selection phase. "
-            f"The following territories are available: {list(available_territories_map.keys())}. "
-            "Choose one territory to claim. Consider strategic value. "
-            """Provide your decision in JSON format: {"action": {"command": "choose_territory", "territory": "<territory_name>"}}"""
+        task_prompt = (
+            f"It is an initial territory selection phase. You are {self.name}. "
+            f"The following territories are available: {current_available_names}. "
+            "Select one territory to claim. Your choice should be strategic. "
+            "Your response MUST be a JSON object containing a single key 'chosen_territory', "
+            "and its value should be the name of the territory you choose. "
+            "Example: `{\"chosen_territory\": \"alaska\"}`"
         )
 
-        llm_response = self.llm_interface.get_decision(prompt, game_state_for_selection)
+        full_prompt = f"{self.system_prompt_part}\n\nCURRENT_SITUATION_AND_TASK:\n{task_prompt}"
+        llm_response = self.llm_interface.get_decision(full_prompt, game_state_for_selection)
 
         chosen_territory = None
-        if llm_response and "action" in llm_response:
-            action = llm_response["action"]
-            if action.get("command") == "choose_territory" and action.get("territory") in available_territories_map:
-                chosen_territory = action["territory"]
+        if isinstance(llm_response, dict) and "chosen_territory" in llm_response:
+            candidate_territory = llm_response["chosen_territory"]
+            if candidate_territory in available_territories_map:
+                chosen_territory = candidate_territory
                 print(f"{self.name}: LLM chose territory: {chosen_territory}")
             else:
-                print(f"{self.name}: LLM provided invalid choice: {action.get('territory')}. Fallback.")
+                print(f"{self.name}: LLM chose unavailable territory '{candidate_territory}'. Fallback.")
         else:
-            print(f"{self.name}: LLM failed to provide valid choice. Fallback.")
+            print(f"{self.name}: LLM failed to provide valid 'chosen_territory' in response ({llm_response}). Fallback.")
 
         if not chosen_territory:
-            chosen_territory = list(available_territories_map.keys())[0]
+            chosen_territory = current_available_names[0]
             print(f"{self.name}: Fallback: Chose territory {chosen_territory}")
-
         return chosen_territory
 
     def deploy_reserve(self, game_master, max_deploys: int = 0):
-        """
-        Handles deployment of reserves during the initial setup phase.
-        """
         armies_to_deploy_this_round = min(self.reserves, max_deploys)
-        if armies_to_deploy_this_round <= 0:
-            return
+        if armies_to_deploy_this_round <= 0: return
 
-        print(f"{self.name}: Initial deployment. Has {self.reserves}, deploying up to {armies_to_deploy_this_round} this round.")
+        print(f"{self.name}: Initial deployment. Has {self.reserves}, deploying {armies_to_deploy_this_round} this round.")
 
-        player_owned_territories_names = list(game_master.player_territories(self).keys())
+        player_owned_territories_map = game_master.player_territories(self)
+        player_owned_territories_names = list(player_owned_territories_map.keys())
+
         if not player_owned_territories_names:
-            print(f"{self.name}: No territories owned to deploy initial reserves. Skipping deployment.")
+            print(f"{self.name}: No territories owned for initial deployment. Skipping.")
             return
 
-        game_state_dict = serialize_game_state(game_master, self)
-        prompt = (
-            f"You are {self.name}, a Risk player. Initial army deployment phase. "
-            f"You own: {player_owned_territories_names}. "
-            f"You have {self.reserves} total reserves. This round, deploy exactly {armies_to_deploy_this_round} armies. "
-            """Provide decisions as {"actions": [{"command": "deploy_initial", "armies": <N>, "to": "<your_territory>"}]}"""
-            f"Sum of 'armies' must be {armies_to_deploy_this_round}."
+        # Use _get_llm_decision, ensuring game_master.phase is correctly set for serialize_game_state
+        task_prompt = (
+            f"It is an initial army deployment phase. You are {self.name}. "
+            f"You currently own these territories: {player_owned_territories_names}. "
+            f"You have {self.reserves} total reserve armies remaining for the entire initial setup. "
+            f"In this specific round, you MUST deploy exactly {armies_to_deploy_this_round} armies onto your territories. "
+            "Distribute these armies. Provide your decisions in the 'actions' list of your JSON response, using the format: "
+            "`{\"command\": \"deploy_initial\", \"armies\": <number>, \"to\": \"<your_territory_name>\"}`. "
+            f"The sum of 'armies' in all your 'deploy_initial' actions for this round MUST equal {armies_to_deploy_this_round}."
         )
-
-        llm_response = self.llm_interface.get_decision(prompt, game_state_dict)
+        # Temporarily override phase for serialize_game_state if game_master isn't in a "DEPLOY" phase
+        llm_response = self._get_llm_decision(game_master, task_prompt, current_phase_override="INITIAL_DEPLOYMENT")
 
         deployed_this_round_count = 0
-        if llm_response and "actions" in llm_response:
+        if llm_response and "actions" in llm_response and isinstance(llm_response["actions"], list):
             for action in llm_response["actions"]:
-                if deployed_this_round_count >= armies_to_deploy_this_round:
-                    break
-                if action.get("command") == "deploy_initial":
+                if deployed_this_round_count >= armies_to_deploy_this_round: break
+                if isinstance(action, dict) and action.get("command") == "deploy_initial":
                     try:
                         territory_name = action["to"]
                         armies_to_add = int(action["armies"])
@@ -361,148 +406,28 @@ class LLMRiskPlayer(AbstractRiskPlayer):
 
                         game_master.player_add_army(self, territory_name, actual_add)
                         deployed_this_round_count += actual_add
-                        print(f"{self.name}: Deployed {actual_add} to {territory_name}. Round total: {deployed_this_round_count}/{armies_to_deploy_this_round}. Reserves left: {self.reserves}")
+                        print(f"{self.name}: Deployed {actual_add} to {territory_name}. Round total: {deployed_this_round_count}/{armies_to_deploy_this_round}. Reserves: {self.reserves}")
 
                     except (KeyError, ValueError) as e:
                         print(f"{self.name}: Invalid 'deploy_initial' action ({action}): {e}.")
                     except Exception as e:
                         print(f"{self.name}: Error deploying to {action.get('to', 'unknown')}: {e}")
 
-        if deployed_this_round_count < armies_to_deploy_this_round:
+        if deployed_this_round_count < armies_to_deploy_this_round: # Fallback
             remaining_for_round = armies_to_deploy_this_round - deployed_this_round_count
-            print(f"{self.name}: LLM did not deploy all {armies_to_deploy_this_round}. {remaining_for_round} left. Fallback.")
-            if player_owned_territories_names: # Should always be true if we entered this method with armies to deploy
+            print(f"{self.name}: LLM under-deployed ({deployed_this_round_count}/{armies_to_deploy_this_round}). {remaining_for_round} left. Fallback.")
+            if player_owned_territories_names:
                 fallback_territory = player_owned_territories_names[0]
                 try:
                     game_master.player_add_army(self, fallback_territory, remaining_for_round)
                     print(f"{self.name}: Fallback: Deployed {remaining_for_round} to {fallback_territory}. Reserves: {self.reserves}")
                 except Exception as e:
-                    print(f"{self.name}: Error during fallback deployment to {fallback_territory}: {e}")
+                    print(f"{self.name}: Error in fallback deployment to {fallback_territory}: {e}")
 
     def move_after_attack(self, game_master, origin_name: str, target_name: str):
-        """
-        Called by GameMaster for human players. LLMRiskPlayer handles this internally.
-        """
         pass
 
 """
 # Example of how LLMRiskPlayer might be instantiated and used (conceptual)
-# from risk.llm.chatgpt import ChatGPTInterface
-# from risk.game_master import GameMaster # Assuming GameMaster can be imported
-# from risk.board.board import StandardBoard # Assuming a board can be created
-
-# This is for illustrative purposes and would not run directly without a game setup
-
-# def main_example():
-    # 1. Create an LLM Interface instance
-    # try:
-    #     chatgpt_interface = ChatGPTInterface()
-    # except ValueError as e:
-    #     print(f"Failed to init LLM Interface: {e}")
-    #     return
-
-    # 2. Create an LLMRiskPlayer instance
-    # llm_player = LLMRiskPlayer(name="Botzilla-GPT", llm_interface=chatgpt_interface)
-
-    # 3. In a game loop (managed by GameMaster), when it's llm_player's turn:
-    # Assume game_master object exists and is set up
-    # game_board = StandardBoard() # Example board
-    # settings = {} # Example settings
-    # num_players = 2 # Example
-    # game = GameMaster(board=game_board, settings=settings, num_players=num_players)
-    # game.players = [llm_player, OtherPlayer()] # Simplified player setup
-    # game._current_player = 0 # Set current player to LLM player for testing a phase
-
-    # Manually set some reserves for testing reinforce
-    # llm_player.reserves = 10
-    # Mock player territories for testing reinforce
-    # class MockTerritory:
-    #     def __init__(self, name, owner, armies):
-    #         self.name = name
-    #         self.owner = owner
-    #         self.armies = armies
-    #     def __str__(self): return self.name
-
-    # territory_alaska = MockTerritory("alaska", llm_player, 5)
-    # territory_kamchatka = MockTerritory("kamchatka", "enemy", 3) #
-    # territory_alberta = MockTerritory("alberta", llm_player, 2)
-
-    # mock_player_territories = {"alaska": territory_alaska, "alberta": territory_alberta }
-    # all_territories = {**mock_player_territories, "kamchatka": territory_kamchatka}
-
-
-    # Mock game_master methods needed by reinforce and serialize_game_state
-    # def mock_gm_player_territories(player):
-    #     if player == llm_player:
-    #         return mock_player_territories
-    #     return {}
-
-    # def mock_gm_player_add_army(player, territory_name, armies):
-    #     if player == llm_player and territory_name in mock_player_territories:
-    #         mock_player_territories[territory_name].armies += armies
-    #         player.reserves -= armies # Crucial: GameMaster is responsible for this
-    #         print(f"[Mock GM]: Added {armies} to {territory_name}, new total: {mock_player_territories[territory_name].armies}. Player reserves: {player.reserves}")
-    #     else:
-    #         raise Exception(f"Mock GM: Cannot add army to {territory_name} for {player.name}")
-
-    # game.player_territories = mock_gm_player_territories
-    # game.player_add_army = mock_gm_player_add_army
-    # game.phase = "REINFORCE" # Current phase for serialize_game_state
-    # game.board = lambda: None # Placeholder
-    # game.board.territories = lambda: all_territories # Make all_territories accessible
-
-
-    # print(f"\n--- Testing Reinforce for {llm_player.name} ---")
-    # llm_player.reinforce(game) # game_master instance is passed
-
-    # print(f"\n--- Testing Attack for {llm_player.name} ---")
-    # Add mock attack and move methods to game for attack phase test
-    # def mock_gm_player_attack(player, origin, target):
-    #     print(f"[Mock GM]: {player.name} attacks from {origin} to {target}")
-    #     # Simulate success for testing move_after_attack
-    #     # In real game, this involves dice rolls etc.
-    #     # Assume target territory is conquered:
-    #     target_obj = all_territories.get(target)
-    #     if target_obj: target_obj.owner = player # change ownership
-    #     return True # Simulate attack success
-
-    # def mock_gm_player_move_armies(player, origin, dest, armies):
-    #      print(f"[Mock GM]: {player.name} moves {armies} from {origin} to {dest}")
-    #      # Actual army updates
-    #      if origin in mock_player_territories: mock_player_territories[origin].armies -= armies
-    #      if dest in mock_player_territories: mock_player_territories[dest].armies += armies
-    #      # if dest was newly conquered, it needs to be added to player's territories if not already
-    #      # This logic is simplified for mock.
-
-    # game.player_attack = mock_gm_player_attack
-    # game.player_move_armies = mock_gm_player_move_armies
-    # game.phase = "ATTACK"
-    # llm_player.attack(game)
-
-
-    # print(f"\n--- Testing Fortify for {llm_player.name} ---")
-    # game.phase = "FORTIFY"
-    # llm_player.fortify(game)
-
-    # print(f"\n--- Testing Choose Territory for {llm_player.name} ---")
-    # available_for_choice = {"greenland": MockTerritory("greenland", None, 0), "iceland": MockTerritory("iceland", None, 0)}
-    # choice = llm_player.choose_territory(available_for_choice)
-    # print(f"{llm_player.name} chose: {choice}")
-
-    # print(f"\n--- Testing Deploy Reserve for {llm_player.name} ---")
-    # llm_player.reserves = 7 # Set reserves for initial deployment test
-    # # Assume "alaska" was chosen and is now owned, for deploy_reserve to work on it
-    # if "alaska" not in mock_player_territories and "alaska" in all_territories:
-    #      all_territories["alaska"].owner = llm_player
-    #      mock_player_territories["alaska"] = all_territories["alaska"]
-
-    # game.phase = "INITIAL_DEPLOYMENT"
-    # llm_player.deploy_reserve(game, max_deploys=5) # Deploy 5 armies
-    # llm_player.deploy_reserve(game, max_deploys=5) # Deploy remaining 2 armies
-
-# if __name__ == "__main__":
-#      # This example won't run correctly without a proper environment
-#      # and more complete mocking or actual game setup.
-#      # main_example()
-#      pass
+# ... (rest of the example comments remain the same)
 """

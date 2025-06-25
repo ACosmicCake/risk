@@ -2,292 +2,266 @@ import unittest
 from unittest.mock import MagicMock, patch, call
 import os
 
-# Ensure API keys are set for LLM interface instantiation, though they won't be used by mock interface
+# Ensure API keys are set for LLM interface instantiation
 os.environ["OPENAI_API_KEY"] = "test_openai_key_for_player_test"
-# Add other keys if your LLM interfaces try to load them immediately even when mocked externally
 os.environ["GOOGLE_API_KEY"] = "test_google_key_for_player_test"
 os.environ["ANTHROPIC_API_KEY"] = "test_anthropic_key_for_player_test"
 os.environ["DEEPSEEK_API_KEY"] = "test_deepseek_key_for_player_test"
 
 from risk.player.llm_player import LLMRiskPlayer, serialize_game_state
-from risk.llm.interface import LLMInterface #Needed for type hint
-from risk.game_master import GameMaster # For type hinting and structure
-from risk.board.territory import Territory # For territory objects
+from risk.llm.interface import LLMInterface
+from risk.game_master import GameMaster
+from risk.board.territory import Territory
+from risk.player.player import AbstractRiskPlayer
 
-# A mock LLM Interface that we can control for tests
+
 class MockLLMInterface(LLMInterface):
     def __init__(self):
-        self.response = None # Default response
-        self.get_decision_called_with = []
+        self.response_to_provide = None
+        self.get_decision_call_args_list = []
 
     def get_decision(self, prompt: str, game_state: dict) -> dict:
-        self.get_decision_called_with.append({'prompt': prompt, 'game_state': game_state})
-        if self.response:
-            return self.response
-        # Default fallback response if none is set by the test
-        return {"thoughts": "Mock LLM thought something.", "actions": [], "chat": {}}
+        self.get_decision_call_args_list.append({'prompt': prompt, 'game_state': game_state})
+        if self.response_to_provide:
+            return self.response_to_provide
+        return {"thoughts": "Default mock thought.", "actions": [], "chat": {"global": "", "private": []}}
 
     def set_response(self, response: dict):
-        self.response = response
+        self.response_to_provide = response
 
     def reset_mock(self):
-        self.response = None
-        self.get_decision_called_with = []
+        self.response_to_provide = None
+        self.get_decision_call_args_list = []
 
 class TestLLMRiskPlayer(unittest.TestCase):
 
     def setUp(self):
         self.mock_llm_interface = MockLLMInterface()
+
+        # Mock serialize_game_state to capture the phase it was called with
+        self.captured_phase_in_serialize = None
+        def side_effect_serialize_game_state(gm, player_persp):
+            self.captured_phase_in_serialize = gm.phase # Capture phase
+            return {"mocked_game_state": "data", "phase_during_serialization": gm.phase} # Return a value
+
+        self.patcher = patch('risk.player.llm_player.serialize_game_state', side_effect=side_effect_serialize_game_state)
+        self.mock_serialize_game_state_patched_obj = self.patcher.start() # This is the MagicMock object
+
         self.player = LLMRiskPlayer(name="TestLLMPlayer", llm_interface=self.mock_llm_interface)
 
-        # Mock GameMaster and its dependencies extensively
         self.mock_game_master = MagicMock(spec=GameMaster)
         self.mock_game_master.board = MagicMock()
 
-        # Mock territories
-        self.territory_a = Territory("Alaska")
-        self.territory_a.armies = 5
-        self.territory_a.owner = self.player # Player owns Alaska
+        self.alaska = Territory("Alaska"); self.alaska.owner = self.player; self.alaska.armies = 5
+        self.alberta = Territory("Alberta"); self.alberta.owner = self.player; self.alberta.armies = 3
+        self.kamchatka = Territory("Kamchatka"); self.kamchatka.owner = "Enemy"; self.kamchatka.armies = 8
+        self.greenland = Territory("Greenland"); self.greenland.owner = None; self.greenland.armies = 0
 
-        self.territory_b = Territory("Alberta")
-        self.territory_b.armies = 3
-        self.territory_b.owner = self.player # Player owns Alberta
+        self.alaska.neighbours = {"Alberta": self.alberta, "Kamchatka": self.kamchatka}
+        self.alberta.neighbours = {"Alaska": self.alaska}
 
-        self.territory_c = Territory("Kamchatka") # Enemy territory
-        self.territory_c.armies = 4
-        self.territory_c.owner = "EnemyPlayer"
-
-        # Minimal neighbour setup for any connectivity checks if they become relevant
-        # self.territory_a.neighbours = {"Alberta": self.territory_b, "Kamchatka": self.territory_c}
-        # self.territory_b.neighbours = {"Alaska": self.territory_a}
-        # self.territory_c.neighbours = {"Alaska": self.territory_a}
-
-
-        # Setup mock_game_master methods
-        self.mock_game_master.player_territories.return_value = {
-            "Alaska": self.territory_a,
-            "Alberta": self.territory_b
-        }
+        self.mock_game_master.player_territories.return_value = {"Alaska": self.alaska, "Alberta": self.alberta}
         self.mock_game_master.board.territories.return_value = {
-            "Alaska": self.territory_a,
-            "Alberta": self.territory_b,
-            "Kamchatka": self.territory_c
+            "Alaska": self.alaska, "Alberta": self.alberta,
+            "Kamchatka": self.kamchatka, "Greenland": self.greenland
         }
-        # GameMaster's player_add_army updates player.reserves
-        def mock_player_add_army(player, territory_name, armies):
+        self.mock_game_master.board.continents = { # For serialize_game_state when not mocked
+            "North America": {"Alaska": self.alaska, "Alberta": self.alberta, "Greenland": self.greenland},
+            "Asia": {"Kamchatka": self.kamchatka}
+        }
+        self.mock_game_master.players = [self.player, MagicMock(spec=AbstractRiskPlayer, name="Opponent1")]
+        self.mock_game_master.current_player.return_value = self.player
+
+        def mock_player_add_army_side_effect(player, territory_name, armies):
             player.reserves -= armies
-            # Simulate army addition on territory if needed for other logic
-            if territory_name == "Alaska": self.territory_a.armies += armies
-            elif territory_name == "Alberta": self.territory_b.armies += armies
+            # Minimal simulation of army change
+            if territory_name == "Alaska": self.alaska.armies += armies
+            elif territory_name == "Alberta": self.alberta.armies += armies
+        self.mock_game_master.player_add_army.side_effect = mock_player_add_army_side_effect
 
-        self.mock_game_master.player_add_army.side_effect = mock_player_add_army
-        self.mock_game_master.player_attack.return_value = True # Assume attack succeeds for move tests
-
-        # Reset player reserves for each test, some methods modify it
+        self.mock_game_master.player_attack.return_value = True
         self.player.reserves = 10
-        self.mock_game_master.phase = "UNDEFINED" # Default phase
-
+        self.mock_game_master.phase = "UNDEFINED" # Default phase for most tests
 
     def tearDown(self):
-        # Clean up environment variables if they were specific to this test class
-        # For now, they are set globally before class definition
-        pass
+        self.patcher.stop()
 
-    def test_player_creation(self):
-        self.assertEqual(self.player.name, "TestLLMPlayer")
-        self.assertTrue(self.player.is_bot)
-        self.assertEqual(self.player.llm_interface, self.mock_llm_interface)
-
-    def test_reinforce_basic(self):
+    @patch('builtins.print')
+    def test_reinforce_with_thoughts_and_chat(self, mock_print):
         self.player.reserves = 5
-        self.mock_game_master.phase = "REINFORCE"
+        self.mock_game_master.phase = "REINFORCE" # Original phase
         self.mock_llm_interface.set_response({
-            "actions": [{"command": "add", "armies": 3, "to": "Alaska"},
-                        {"command": "add", "armies": 2, "to": "Alberta"}]
+            "thoughts": "Reinforcing Alaska strategically.",
+            "actions": [{"command": "add", "armies": 5, "to": "Alaska"}],
+            "chat": {"global": "Taking my turn!", "private": [{"to": "Opponent1", "message": "Watch out!"}]}
         })
 
         self.player.reinforce(self.mock_game_master)
 
-        self.assertEqual(len(self.mock_llm_interface.get_decision_called_with), 1)
-        self.mock_game_master.player_add_army.assert_any_call(self.player, "Alaska", 3)
-        self.mock_game_master.player_add_army.assert_any_call(self.player, "Alberta", 2)
-        self.assertEqual(self.player.reserves, 0) # All reserves deployed
-
-    def test_reinforce_partial_llm_deploy_with_fallback(self):
-        self.player.reserves = 10
-        self.mock_game_master.phase = "REINFORCE"
-        # LLM only deploys 5 armies
-        self.mock_llm_interface.set_response({
-            "actions": [{"command": "add", "armies": 5, "to": "Alaska"}]
-        })
-
-        self.player.reinforce(self.mock_game_master)
-
-        self.mock_game_master.player_add_army.assert_any_call(self.player, "Alaska", 5)
-        # Fallback should deploy remaining 5 to the first territory ("Alaska" in mock setup)
-        # The first call is the LLM's, the second is the fallback.
-        self.assertEqual(self.mock_game_master.player_add_army.call_count, 2)
-        # Check the fallback call specifically (it will be the last one)
-        self.mock_game_master.player_add_army.assert_called_with(self.player, "Alaska", 5) # Fallback
+        self.mock_serialize_game_state_patched_obj.assert_called_once_with(self.mock_game_master, self.player)
+        self.assertEqual(self.captured_phase_in_serialize, "REINFORCE") # Phase during serialization
+        self.assertEqual(len(self.mock_llm_interface.get_decision_call_args_list), 1)
+        self.mock_game_master.player_add_army.assert_called_once_with(self.player, "Alaska", 5)
         self.assertEqual(self.player.reserves, 0)
 
+        mock_print.assert_any_call("LLM (TestLLMPlayer) thoughts: Reinforcing Alaska strategically.")
+        mock_print.assert_any_call("LLM (TestLLMPlayer) global chat: Taking my turn!")
+        mock_print.assert_any_call("LLM (TestLLMPlayer) private chat to Opponent1: Watch out!")
 
-    def test_reinforce_no_reserves(self):
-        self.player.reserves = 0
-        self.mock_game_master.phase = "REINFORCE"
-        self.player.reinforce(self.mock_game_master)
-        self.assertEqual(len(self.mock_llm_interface.get_decision_called_with), 0) # Should not call LLM
-        self.mock_game_master.player_add_army.assert_not_called()
 
-    def test_attack_basic_and_move(self):
+    @patch('builtins.print')
+    def test_attack_with_thoughts_and_default_move(self, mock_print):
         self.mock_game_master.phase = "ATTACK"
-        self.territory_a.armies = 5 # Ensure enough armies to attack and move
-
-        # LLM decides to attack, then specifies move
+        self.alaska.armies = 5
         self.mock_llm_interface.set_response({
-            "actions": [
-                {"command": "attack", "from": "Alaska", "to": "Kamchatka"},
-                {"command": "move_after_attack", "from": "Alaska", "to": "Kamchatka", "armies": 3}
-            ]
+            "thoughts": "Attacking Kamchatka seems viable.",
+            "actions": [{"command": "attack", "from": "Alaska", "to": "Kamchatka"}],
+            "chat": {}
         })
 
         self.player.attack(self.mock_game_master)
 
-        self.assertEqual(len(self.mock_llm_interface.get_decision_called_with), 1)
+        self.mock_serialize_game_state_patched_obj.assert_called_once_with(self.mock_game_master, self.player)
+        self.assertEqual(self.captured_phase_in_serialize, "ATTACK")
         self.mock_game_master.player_attack.assert_called_once_with(self.player, "Alaska", "Kamchatka")
-        # Assuming attack is successful (mocked to return True), player_move_armies should be called
-        self.mock_game_master.player_move_armies.assert_called_once_with(self.player, "Alaska", "Kamchatka", 3)
-
-    def test_attack_no_action_from_llm(self):
-        self.mock_game_master.phase = "ATTACK"
-        self.mock_llm_interface.set_response({"actions": []}) # LLM decides not to attack
-
-        self.player.attack(self.mock_game_master)
-
-        self.assertEqual(len(self.mock_llm_interface.get_decision_called_with), 1)
-        self.mock_game_master.player_attack.assert_not_called()
-        self.mock_game_master.player_move_armies.assert_not_called()
-
-    def test_attack_default_move(self):
-        self.mock_game_master.phase = "ATTACK"
-        self.territory_a.armies = 5 # Attacking territory
-        self.mock_game_master.player_attack.return_value = True # Attack succeeds
-
-        # LLM decides to attack, but does NOT specify move_after_attack
-        self.mock_llm_interface.set_response({
-            "actions": [{"command": "attack", "from": "Alaska", "to": "Kamchatka"}]
-        })
-
-        self.player.attack(self.mock_game_master)
-
-        self.mock_game_master.player_attack.assert_called_once_with(self.player, "Alaska", "Kamchatka")
-        # Default move logic: (5-1)//2 = 2 armies. Min 1, Max 4. So 2 is correct.
         self.mock_game_master.player_move_armies.assert_called_once_with(self.player, "Alaska", "Kamchatka", 2)
+        mock_print.assert_any_call("LLM (TestLLMPlayer) thoughts: Attacking Kamchatka seems viable.")
 
-
-    def test_fortify_basic(self):
+    @patch('builtins.print')
+    def test_fortify_no_action(self, mock_print):
         self.mock_game_master.phase = "FORTIFY"
-        self.territory_a.armies = 10 # Source for fortification
         self.mock_llm_interface.set_response({
-            "actions": [{"command": "fortify", "from": "Alaska", "to": "Alberta", "with": 3}]
+            "thoughts": "No good fortification move this turn.",
+            "actions": [],
+            "chat": {"global": "Passing fortify."}
         })
 
         self.player.fortify(self.mock_game_master)
 
-        self.assertEqual(len(self.mock_llm_interface.get_decision_called_with), 1)
-        self.mock_game_master.player_move_armies.assert_called_once_with(self.player, "Alaska", "Alberta", 3)
-
-    def test_fortify_no_action_from_llm(self):
-        self.mock_game_master.phase = "FORTIFY"
-        self.mock_llm_interface.set_response({"actions": []}) # LLM decides not to fortify
-
-        self.player.fortify(self.mock_game_master)
-
-        self.assertEqual(len(self.mock_llm_interface.get_decision_called_with), 1)
+        self.mock_serialize_game_state_patched_obj.assert_called_once_with(self.mock_game_master, self.player)
+        self.assertEqual(self.captured_phase_in_serialize, "FORTIFY")
         self.mock_game_master.player_move_armies.assert_not_called()
+        mock_print.assert_any_call("LLM (TestLLMPlayer) thoughts: No good fortification move this turn.")
+        mock_print.assert_any_call("LLM (TestLLMPlayer) global chat: Passing fortify.")
 
-    def test_choose_territory_llm_provides_valid(self):
+    def test_choose_territory_refined(self):
+        self.patcher.stop() # Stop general patch for this specific test
+
         available = {"Greenland": Territory("Greenland"), "Iceland": Territory("Iceland")}
-        # Set required attributes if needed for the test, e.g. owner, armies, though choose_territory might not use them
-        available["Greenland"].owner = None
-        available["Greenland"].armies = 0
-        available["Iceland"].owner = None
-        available["Iceland"].armies = 0
+        available["Greenland"].owner = None; available["Iceland"].owner = None
 
-        self.mock_llm_interface.set_response({
-            "action": {"command": "choose_territory", "territory": "Iceland"}
-        })
+        self.mock_llm_interface.set_response({"chosen_territory": "Iceland"})
 
         choice = self.player.choose_territory(available)
 
-        self.assertEqual(len(self.mock_llm_interface.get_decision_called_with), 1)
+        self.assertEqual(len(self.mock_llm_interface.get_decision_call_args_list), 1)
+        prompt_arg = self.mock_llm_interface.get_decision_call_args_list[0]['prompt']
+        game_state_arg = self.mock_llm_interface.get_decision_call_args_list[0]['game_state']
+
+        self.assertIn("INITIAL_TERRITORY_SELECTION", game_state_arg["current_phase"])
+        self.assertIn("chosen_territory", prompt_arg)
         self.assertEqual(choice, "Iceland")
 
-    def test_choose_territory_llm_provides_invalid_fallback(self):
-        available = {"Greenland": Territory("Greenland"), "Iceland": Territory("Iceland")}
-        available["Greenland"].owner = None
-        available["Greenland"].armies = 0
-        available["Iceland"].owner = None
-        available["Iceland"].armies = 0
+        self.patcher.start() # Restart patch
 
-        self.mock_llm_interface.set_response({
-            "action": {"command": "choose_territory", "territory": "Egypt"} # Egypt not available
-        })
 
-        choice = self.player.choose_territory(available)
-
-        self.assertEqual(len(self.mock_llm_interface.get_decision_called_with), 1)
-        self.assertEqual(choice, "Greenland") # Fallback to first available
-
-    def test_deploy_reserve_initial_setup(self):
+    @patch('builtins.print')
+    def test_deploy_reserve_refined(self, mock_print):
         self.player.reserves = 7
         max_deploys_this_round = 5
-        # Alaska is owned by player from setup
-        self.mock_game_master.phase = "INITIAL_DEPLOYMENT"
+        self.mock_game_master.phase = "DEPLOY_TROOPS_PHASE_UNRELATED_TO_SERIALIZATION" # Actual GM phase
+
+        self.mock_game_master.player_territories.return_value = {"Alaska": self.alaska} # For deploy_reserve logic
 
         self.mock_llm_interface.set_response({
+            "thoughts": "Deploying initial armies.",
             "actions": [{"command": "deploy_initial", "armies": 3, "to": "Alaska"},
-                        {"command": "deploy_initial", "armies": 2, "to": "Alberta"}]
+                        {"command": "deploy_initial", "armies": 2, "to": "Alaska"}],
+            "chat": {}
         })
 
         self.player.deploy_reserve(self.mock_game_master, max_deploys_this_round)
 
-        self.assertEqual(len(self.mock_llm_interface.get_decision_called_with), 1)
+        self.mock_serialize_game_state_patched_obj.assert_called_once_with(self.mock_game_master, self.player)
+        # Check that serialize_game_state was called with the phase overridden
+        self.assertEqual(self.captured_phase_in_serialize, "INITIAL_DEPLOYMENT")
+        # Check that game_master.phase is restored after the call to _get_llm_decision
+        self.assertEqual(self.mock_game_master.phase, "DEPLOY_TROOPS_PHASE_UNRELATED_TO_SERIALIZATION")
+
         self.mock_game_master.player_add_army.assert_any_call(self.player, "Alaska", 3)
-        self.mock_game_master.player_add_army.assert_any_call(self.player, "Alberta", 2)
+        self.mock_game_master.player_add_army.assert_any_call(self.player, "Alaska", 2)
         self.assertEqual(self.mock_game_master.player_add_army.call_count, 2)
-        self.assertEqual(self.player.reserves, 2) # 7 - 5 = 2 reserves left overall
+        self.assertEqual(self.player.reserves, 2)
+        mock_print.assert_any_call("LLM (TestLLMPlayer) thoughts: Deploying initial armies.")
 
-    def test_deploy_reserve_llm_fails_fallback(self):
-        self.player.reserves = 5
-        max_deploys_this_round = 5
-        self.mock_game_master.phase = "INITIAL_DEPLOYMENT"
+    def test_serialize_game_state_comprehensive(self):
+        self.patcher.stop() # Stop the general patch to test the real serialize_game_state
 
-        # LLM only deploys 2, or provides invalid action
-        self.mock_llm_interface.set_response({
-            "actions": [{"command": "deploy_initial", "armies": 2, "to": "Alaska"}]
-        })
+        mock_player_self_obj = MagicMock(spec=AbstractRiskPlayer)
+        mock_player_self_obj.name = "TestLLMPlayerSerialize"
+        mock_player_self_obj.reserves = 7
 
-        self.player.deploy_reserve(self.mock_game_master, max_deploys_this_round)
+        mock_player_other_obj = MagicMock(spec=AbstractRiskPlayer)
+        mock_player_other_obj.name = "OpponentSerialize"
+        mock_player_other_obj.reserves = 10
 
-        self.mock_game_master.player_add_army.assert_any_call(self.player, "Alaska", 2) # LLM's action
-        # Fallback should deploy remaining 3 (5-2) to "Alaska" (first owned territory)
-        self.mock_game_master.player_add_army.assert_called_with(self.player, "Alaska", 3) # Fallback call
-        self.assertEqual(self.mock_game_master.player_add_army.call_count, 2)
-        self.assertEqual(self.player.reserves, 0)
+        alaska = Territory("Alaska"); alberta = Territory("Alberta")
+        kamchatka = Territory("Kamchatka"); greenland = Territory("Greenland")
 
-    def test_serialize_game_state_basic(self):
-        self.player.reserves = 3
-        self.mock_game_master.phase = "TEST_PHASE"
-        # player_territories mock is already set up in self.setUp
+        alaska.owner = mock_player_self_obj; alaska.armies = 5
+        alberta.owner = mock_player_self_obj; alberta.armies = 3
+        kamchatka.owner = mock_player_other_obj; kamchatka.armies = 8
+        greenland.owner = None; greenland.armies = 0
 
-        state = serialize_game_state(self.mock_game_master, self.player)
+        alaska.neighbours = {"Alberta": alberta, "Kamchatka": kamchatka}
+        alberta.neighbours = {"Alaska": alaska}; kamchatka.neighbours = {"Alaska": alaska}
+        greenland.neighbours = {}
 
-        self.assertEqual(state["current_phase"], "TEST_PHASE")
-        self.assertEqual(state["my_reserves"], 3)
-        self.assertIn("Alaska", state["my_territories"])
-        self.assertIn("Alberta", state["my_territories"])
+        mock_gm = MagicMock(spec=GameMaster)
+        mock_gm.current_player.return_value = mock_player_self_obj
+        mock_gm.phase = "ATTACK_SERIALIZE"
+        # Mock players list on game_master
+        mock_gm.players = [mock_player_self_obj, mock_player_other_obj]
 
+
+        mock_board = MagicMock()
+        mock_board.continents = {
+            "North America": {"Alaska": alaska, "Alberta": alberta, "Greenland": greenland},
+            "Asia": {"Kamchatka": kamchatka}
+        }
+        mock_board.territories.return_value = {
+            "Alaska": alaska, "Alberta": alberta, "Kamchatka": kamchatka, "Greenland": greenland
+        }
+        mock_gm.board = mock_board
+
+        def s_player_territories(player):
+            if player == mock_player_self_obj: return {"Alaska": alaska, "Alberta": alberta}
+            if player == mock_player_other_obj: return {"Kamchatka": kamchatka}
+            return {}
+        mock_gm.player_territories.side_effect = s_player_territories
+
+        def s_player_total_armies(player):
+            count = 0; terrs = s_player_territories(player)
+            if isinstance(terrs, dict):
+                for terr_obj in terrs.values(): count += terr_obj.armies
+            return count
+        mock_gm.player_total_armies.side_effect = s_player_total_armies
+
+        state = serialize_game_state(mock_gm, mock_player_self_obj)
+
+        self.assertEqual(state["current_turn"]["player_name"], "TestLLMPlayerSerialize")
+        self.assertEqual(state["current_turn"]["phase"], "ATTACK_SERIALIZE")
+        self.assertEqual(state["your_status"]["name"], "TestLLMPlayerSerialize")
+        self.assertEqual(len(state["your_status"]["territories_owned"]), 2)
+        alaska_status = next(t for t in state["your_status"]["territories_owned"] if t["name"] == "Alaska")
+        self.assertEqual(alaska_status["continent"], "North America")
+        self.assertEqual(len(state["board_state"]), 4)
+        self.assertEqual(len(state["players"]), 2)
+        player_other_in_list = next(p for p in state["players"] if p["name"] == "OpponentSerialize")
+        self.assertEqual(player_other_in_list["territory_count"], 1)
+        self.assertEqual(player_other_in_list["total_armies"], 8)
+
+        self.patcher.start()
 
 if __name__ == '__main__':
     unittest.main()

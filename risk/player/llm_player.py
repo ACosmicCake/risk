@@ -1,5 +1,12 @@
+import time
 from risk.player.player import AbstractRiskPlayer
 from risk.llm.interface import LLMInterface
+try:
+    from risk.graphics.graphics import AI_ACTION_DELAY_SECONDS
+except ImportError: # Fallback if graphics not available (e.g. CLI mode tests)
+    AI_ACTION_DELAY_SECONDS = 0
+
+
 # Import game_master related errors if needed for type hinting or specific exceptions
 # from risk.errors.game_master import *
 
@@ -124,16 +131,33 @@ class LLMRiskPlayer(AbstractRiskPlayer):
 
         print(f"LLM ({self.name}) thoughts: {llm_response.get('thoughts', 'N/A')}")
         if llm_response.get("chat"):
-            if llm_response["chat"].get("global"):
-                print(f"LLM ({self.name}) global chat: {llm_response['chat']['global']}")
-            if llm_response["chat"].get("private"):
-                private_chats = llm_response["chat"]["private"]
-                if isinstance(private_chats, list):
-                    for private_msg in private_chats:
-                        if isinstance(private_msg, dict):
-                            print(f"LLM ({self.name}) private chat to {private_msg.get('to')}: {private_msg.get('message')}")
-                        else:
-                            print(f"LLM ({self.name}) malformed private chat entry: {private_msg}")
+            global_message = llm_response["chat"].get("global")
+            if global_message:
+                # print(f"LLM ({self.name}) global chat: {global_message}") # Keep print for now, GUI will take over
+                for callback in game_master.callbacks.get('new_chat_message', []):
+                    callback({"type": "global", "sender_name": self.name, "message": global_message})
+
+            private_messages = llm_response["chat"].get("private")
+            if isinstance(private_messages, list):
+                for private_msg in private_messages:
+                    if isinstance(private_msg, dict) and "to" in private_msg and "message" in private_msg:
+                        # print(f"LLM ({self.name}) private chat to {private_msg.get('to')}: {private_msg.get('message')}")
+                        for callback in game_master.callbacks.get('new_chat_message', []):
+                            callback({
+                                "type": "private",
+                                "sender_name": self.name,
+                                "receiver_name": private_msg["to"],
+                                "message": private_msg["message"]
+                            })
+                    else:
+                        print(f"LLM ({self.name}) malformed private chat entry: {private_msg}")
+
+        player_thoughts = llm_response.get('thoughts', None)
+        if player_thoughts:
+            # print(f"LLM ({self.name}) thoughts: {player_thoughts}") # Keep print for now
+            for callback in game_master.callbacks.get('ai_thoughts_updated', []):
+                callback(self.name, player_thoughts)
+
         return llm_response
 
 
@@ -166,6 +190,7 @@ class LLMRiskPlayer(AbstractRiskPlayer):
                         game_master.player_add_army(self, territory_name, actual_armies_to_deploy)
                         print(f"{self.name}: Deployed to {territory_name}. Reserves left: {self.reserves}")
                         actions_taken_count +=1
+                        if AI_ACTION_DELAY_SECONDS > 0: time.sleep(AI_ACTION_DELAY_SECONDS)
                     except (KeyError, ValueError) as e:
                         print(f"{self.name}: Malformed 'add' action: {action}. Error: {e}")
                     except Exception as e:
@@ -216,14 +241,23 @@ class LLMRiskPlayer(AbstractRiskPlayer):
                             print(f"{self.name}: Invalid attack: {origin_name} ({origin_territory.armies if origin_territory else 'N/A'}) to {target_name}. Skipping.")
                             continue
 
-                        print(f"{self.name}: Attempting attack: {origin_name} to {target_name}.")
+                        print(f"{self.name}: Declaring attack: {origin_name} to {target_name}.")
+                        # Trigger attack declared callback for GUI visualization
+                        for callback in game_master.callbacks.get('attack_declared', []):
+                            callback(origin_name, target_name)
+
+                        # Brief pause for visualization before outcome (optional, actual delay is Step 3.3.3)
+                        # pygame.time.wait(500) # Example: 500ms pause - requires pygame import
+
                         success = game_master.player_attack(self, origin_name, target_name)
 
                         if success:
                             print(f"{self.name}: Conquered {target_name} from {origin_name}!")
+                            if AI_ACTION_DELAY_SECONDS > 0: time.sleep(AI_ACTION_DELAY_SECONDS) # Delay after attack resolution
                             self._handle_move_after_attack(game_master, origin_name, target_name, llm_response, action_index)
                         else:
                             print(f"{self.name}: Attack {origin_name} to {target_name} failed.")
+                            if AI_ACTION_DELAY_SECONDS > 0: time.sleep(AI_ACTION_DELAY_SECONDS) # Delay even if failed
                     except KeyError as e:
                         print(f"{self.name}: Malformed 'attack' action: {action}. Missing key: {e}")
                     except Exception as e:
@@ -269,6 +303,7 @@ class LLMRiskPlayer(AbstractRiskPlayer):
             try:
                 game_master.player_move_armies(self, origin_name, target_name, armies_to_move)
                 print(f"{self.name}: Moved {armies_to_move} from {origin_name} to {target_name}.")
+                if AI_ACTION_DELAY_SECONDS > 0: time.sleep(AI_ACTION_DELAY_SECONDS)
             except Exception as e:
                 print(f"{self.name}: Error moving armies {origin_name}->{target_name}: {e}")
         else:
@@ -308,6 +343,7 @@ class LLMRiskPlayer(AbstractRiskPlayer):
                         print(f"{self.name}: Attempting fortify: {origin_name} to {target_name} with {armies_to_move}.")
                         game_master.player_move_armies(self, origin_name, target_name, armies_to_move)
                         print(f"{self.name}: Fortified {origin_name} to {target_name}.")
+                        if AI_ACTION_DELAY_SECONDS > 0: time.sleep(AI_ACTION_DELAY_SECONDS)
                     except KeyError as e:
                         print(f"{self.name}: Malformed 'fortify' action: {action}. Missing key: {e}")
                     except ValueError as e:
@@ -407,7 +443,7 @@ class LLMRiskPlayer(AbstractRiskPlayer):
                         game_master.player_add_army(self, territory_name, actual_add)
                         deployed_this_round_count += actual_add
                         print(f"{self.name}: Deployed {actual_add} to {territory_name}. Round total: {deployed_this_round_count}/{armies_to_deploy_this_round}. Reserves: {self.reserves}")
-
+                        if AI_ACTION_DELAY_SECONDS > 0: time.sleep(AI_ACTION_DELAY_SECONDS)
                     except (KeyError, ValueError) as e:
                         print(f"{self.name}: Invalid 'deploy_initial' action ({action}): {e}.")
                     except Exception as e:

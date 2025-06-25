@@ -34,6 +34,9 @@ INFO_PANEL_Y = 585
 INFO_PANEL_WIDTH = 410
 INFO_PANEL_HEIGHT = 110
 
+# Delay for AI actions to make them observable
+AI_ACTION_DELAY_SECONDS = 0.5 # Configurable: 0.5 seconds delay between AI actions
+
 UI_OVERLAY_LEVEL0 = '2_ui'
 UI_OVERLAY_LEVEL1 = '3_ui'
 
@@ -94,12 +97,16 @@ territory_coordinates = {
     }
 }
 
-def init(game_master):
+def init(game_master, screen=None): # Add screen parameter with a default
     debug("initializing graphics library...")
     add_graphic_hooks(game_master)
     debug("attempting to get singleton picasso")
+    # If a screen is passed, Picasso should use it instead of creating a new one.
+    # This requires picasso.get_picasso to be able to accept a 'screen' argument.
+    # For now, this change assumes picasso.get_picasso is adapted or ignores extra kwargs.
+    # If screen is None, it operates as before.
     picasso = risk.graphics.picasso.get_picasso(width=DEFAULT_WIDTH, 
-            height=DEFAULT_HEIGHT, background=DEFAULT_BACKGROUND)
+            height=DEFAULT_HEIGHT, background=DEFAULT_BACKGROUND, screen=screen)
     debug("obtained picasso instance")
     debug("building risk board")
     initialize_territories(picasso, game_master)
@@ -132,7 +139,78 @@ def add_graphic_hooks(game_master):
     game_master.add_start_turn_callback(show_current_human_player)
     #game_master.add_end_action_callback(delay)
 
+    # Add hooks for AI Mind-Reader panels
+    game_master.add_ai_thoughts_updated_callback(update_ai_thoughts_panel)
+    game_master.add_new_chat_message_callback(add_chat_message_to_panel)
+    # Add hook for attack declaration visualization
+    game_master.add_attack_declared_callback(visualize_attack_declaration)
+
+
+# Handler for AI thoughts update
+def update_ai_thoughts_panel(player_name, thoughts_text):
+    datastore = Datastore()
+    try:
+        thoughts_panel = datastore.get_entry('thoughts_panel')
+        if game_master_instance and player_name == game_master_instance.current_player().name: # Ensure it's the current player's thoughts
+            thoughts_panel.set_text(f"[{player_name}'s Thoughts]:\n{thoughts_text}")
+        elif not game_master_instance : # Should not happen if game is running
+             thoughts_panel.set_text(f"[{player_name}'s Thoughts (GM not ref)]:\n{thoughts_text}")
+    except KeyError:
+        error("Thoughts panel not found in datastore for AI thoughts update.")
+    except Exception as e:
+        error(f"Error updating thoughts panel: {e}")
+
+# Handler for new chat messages
+def add_chat_message_to_panel(chat_data):
+    datastore = Datastore()
+    try:
+        comm_panel = datastore.get_entry('communication_panel')
+        sender = chat_data.get("sender_name", "Unknown")
+        message = chat_data.get("message", "")
+
+        if chat_data.get("type") == "global":
+            comm_panel.add_global_message(sender, message)
+        elif chat_data.get("type") == "private":
+            receiver = chat_data.get("receiver_name", "Unknown")
+            # Pass current player name if needed by add_private_message for context
+            # For now, assuming CommunicationPanel handles the display logic sufficiently
+            comm_panel.add_private_message(sender, receiver, message,
+                                           current_player_name=game_master_instance.current_player().name if game_master_instance else "N/A")
+    except KeyError:
+        error("Communication panel not found in datastore for chat message.")
+    except Exception as e:
+        error(f"Error adding chat message to panel: {e}")
+
+# Handler for attack declaration visualization
+def visualize_attack_declaration(origin_name, target_name):
+    datastore = Datastore()
+    try:
+        origin_asset = datastore.get_entry(origin_name, 'territories')
+        target_asset = datastore.get_entry(target_name, 'territories')
+
+        if origin_asset and hasattr(origin_asset, 'start_flashing'):
+            origin_asset.start_flashing(duration=1.0, color=assets.base.ORANGE) # Flash orange for attacker
+        else:
+            warn(f"Could not find TerritoryAsset for origin: {origin_name} or it doesn't support flashing.")
+
+        if target_asset and hasattr(target_asset, 'start_flashing'):
+            target_asset.start_flashing(duration=1.0, color=assets.base.RED) # Flash red for defender
+        else:
+            warn(f"Could not find TerritoryAsset for target: {target_name} or it doesn't support flashing.")
+
+    except KeyError as e:
+        error(f"Territory asset not found in datastore for attack visualization: {e}")
+    except Exception as e:
+        error(f"Error during attack visualization: {e}")
+
+
+# Need a reference to game_master for context in callbacks, e.g. current player
+game_master_instance = None
+
 def initialize_territories(picasso, game_master):
+    global game_master_instance
+    game_master_instance = game_master # Store game_master reference
+
     datastore = Datastore()
     for continent, territories in game_master.board.continents.items():
         for territory_name, territory in territories.items():
@@ -167,6 +245,63 @@ def initialize_other_graphic_assets(picasso, game_master):
     datastore.add_entry('player_colour', human_player_asset)
     picasso.add_asset(UI_OVERLAY_LEVEL0, player_background_asset)
     picasso.add_asset(UI_OVERLAY_LEVEL1, human_player_asset)
+
+    # Initialize AI Mind-Reader Panels
+    # Define panel dimensions and positions (these are examples, adjust as needed)
+    thoughts_panel_x = 750  # Right side of the screen
+    thoughts_panel_y = 350
+    thoughts_panel_width = 370
+    thoughts_panel_height = 150
+
+    comms_panel_x = thoughts_panel_x
+    comms_panel_y = thoughts_panel_y + thoughts_panel_height + 10 # Below thoughts panel
+    comms_panel_width = thoughts_panel_width
+    comms_panel_height = 150
+
+    thoughts_panel = assets.ui_panels.ThoughtsPanel(
+        thoughts_panel_x, thoughts_panel_y, thoughts_panel_width, thoughts_panel_height
+    )
+    datastore.add_entry('thoughts_panel', thoughts_panel)
+    picasso.add_asset(UI_OVERLAY_LEVEL0, thoughts_panel) # Add to a suitable layer
+
+    # CommunicationPanel currently draws its own children in its test code.
+    # For Picasso integration, we'd typically add children as separate assets
+    # or CommunicationPanel's draw() returns a fully composed surface.
+    # Let's assume CommunicationPanel's children (like its internal global_chat_display)
+    # will be managed by its own draw method for now, or added separately if they become PicassoAssets.
+
+    # communication_panel_container = assets.ui_panels.CommunicationPanel(
+    #     comms_panel_x, comms_panel_y, comms_panel_width, comms_panel_height
+    # )
+    # datastore.add_entry('communication_panel_container', communication_panel_container)
+    # picasso.add_asset(UI_OVERLAY_LEVEL0, communication_panel_container) # Draws the border/bg
+
+    # The actual text display part of CommunicationPanel
+    # This assumes CommunicationPanel is updated to expose its child display panel
+    # Or, we create and manage it here. For simplicity, let's assume comms_panel_display is the main asset.
+    communication_panel_display = assets.ui_panels.CommunicationPanel( # Renaming for clarity
+         comms_panel_x, comms_panel_y, comms_panel_width, comms_panel_height
+    )
+    datastore.add_entry('communication_panel', communication_panel_display)
+    # Add its main surface (border/bg)
+    picasso.add_asset(UI_OVERLAY_LEVEL0, communication_panel_display)
+    # Add its child text display panel (global_chat_display)
+    # This requires CommunicationPanel to expose global_chat_display as a PicassoAsset
+    # or for global_chat_display to be created and managed here.
+    # For now, let's assume CommunicationPanel.global_chat_display is a PicassoAsset
+    # and its x,y are screen coordinates.
+    # This part is a bit tricky with current CommunicationPanel design.
+    # A simpler approach for now: CommPanel's draw() renders everything on its surface.
+    # Or, we only instantiate and add its ScrollableTextPanel child directly to Picasso for now.
+
+    # Let's refine CommunicationPanel: its draw() should return its fully rendered surface.
+    # The ScrollableTextPanel child will be drawn onto CommunicationPanel's surface.
+    # So, only communication_panel_display (the CommunicationPanel instance) is added to Picasso.
+
+    # If CommunicationPanel's children (like global_chat_display) need separate event handling
+    # or Picasso layer management, they would need to be separate PicassoAssets.
+    # For now, CommunicationPanel's handle_event will manage its children's events.
+
 
 def add_state_indicators(picasso, game_master):
     datastore = Datastore()

@@ -28,17 +28,33 @@ def get_picasso(*args, **kwargs):
 
 class Picasso(threading.Thread):
     def __init__(self, background='', width=1920, 
-                height=1080, fps=100, caption='RiskPy'):
-        pygame.init()
+                height=1080, fps=100, caption='RiskPy', screen=None): # Added screen parameter
+        # Pygame should already be initialized by the time Picasso is called if a screen is passed
+        # If not, or if screen is None, initialize it.
+        if not pygame.get_init():
+            pygame.init()
+
         flags = 0x0
-        flags |= pygame.RESIZABLE
-        self.window = pygame.display.set_mode((width, height), flags)
-        pygame.display.set_caption(caption)
+        flags |= pygame.RESIZABLE # Keep resizable if that's desired
+
+        if screen:
+            self.window = screen
+            # If using an existing screen, width/height should ideally match
+            # For now, we'll use the passed screen's dimensions if they differ from defaults
+            width = screen.get_width()
+            height = screen.get_height()
+        else:
+            self.window = pygame.display.set_mode((width, height), flags)
+            pygame.display.set_caption(caption)
             
         # convert background for faster draw
-        self.background = pygame.image.load(background).convert()
-        self.background = \
-            pygame.transform.scale(self.background, (width, height))
+        if background: # Only load background if a path is provided
+            self.background = pygame.image.load(background).convert()
+            self.background = \
+                pygame.transform.scale(self.background, (width, height))
+        else: # Provide a default black background if none specified
+            self.background = pygame.Surface((width, height))
+            self.background.fill((0,0,0)) # Black
 
         self.fps = fps
         self.canvas = {}
@@ -54,15 +70,60 @@ class Picasso(threading.Thread):
         try:
             pygame.mouse.set_visible(False)
             while not self.ended:
-                self.draw_canvas()
+                # Event handling
+                mouse_pos = pygame.mouse.get_pos() # Get mouse position once per frame
+                for event in pygame.event.get(): # Use pygame.event.get() for full event queue
+                    if event.type == pygame.QUIT:
+                        self.ended = True
+                        # Potentially call game_master.end_game() or a shutdown callback here
+                        # For now, just ending Picasso loop. GameMaster should handle full exit.
+                        break
+
+                    # Pass event to interactive assets/panels
+                    # This needs a way to access these specific assets.
+                    # Using Datastore is one option if panels are registered there.
+                    # Or Picasso could maintain a list of event-handling assets.
+                    # For now, let's assume we can get them from Datastore for simplicity.
+                    try:
+                        from risk.graphics.datastore import Datastore # Local import for now
+                        datastore = Datastore()
+                        thoughts_panel = datastore.get_entry('thoughts_panel')
+                        if thoughts_panel and hasattr(thoughts_panel, 'handle_event'):
+                            if thoughts_panel.handle_event(event, mouse_pos):
+                                continue # Event handled by this panel
+
+                        comm_panel = datastore.get_entry('communication_panel')
+                        if comm_panel and hasattr(comm_panel, 'handle_event'):
+                            if comm_panel.handle_event(event, mouse_pos):
+                                continue # Event handled
+
+                        # Add other event handling for existing clickables if not covered by pump()
+                        # The existing `pump()` in event.py might handle some global events or specific clicks.
+                        # This new loop is more explicit for panel interactions.
+
+                    except Exception as e_event_handling:
+                        risk.logger.error(f"Error during Picasso event handling: {e_event_handling}")
+
+                if self.ended: break
+
+                self.draw_canvas_contents() # Renamed drawing part
                 self.clock.tick(self.fps)
         except Exception as e:
             risk.logger.critical(
-                "shit happened in the picasso subsystem! %s" % e)
-        pygame.quit()
+                "Exception in Picasso subsystem run loop! %s" % e)
+        finally: # Ensure pygame quits if Picasso thread exits unexpectedly
+            if pygame.get_init(): # Check if pygame is still initialized
+                 risk.logger.info("Picasso thread ending, calling pygame.quit()")
+                 pygame.quit()
 
-    def draw_canvas(self):
-        pump()
+
+    def draw_canvas_contents(self): # Renamed from draw_canvas
+        # pump() # Original pump() call - review its purpose. It might be for custom event queue.
+               # For now, using pygame.event.get() above is more standard.
+               # If pump() from event.py is critical for other things, it needs to be integrated.
+               # From event.py, pump() seems to just call pygame.event.pump().
+               # pygame.event.get() also calls pump internally, so direct pump() might be redundant.
+
         self.window.blit(self.background, (0, 0))
 
         # make a deep copy of layers first to avoid race condition where dict

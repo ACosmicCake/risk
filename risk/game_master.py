@@ -8,7 +8,8 @@ import risk.board
 from risk.ai import BasicRiskBot
 from risk.errors.game_master import *
 from risk.errors.battle import *
-from risk.player import HumonRiskPlayer
+from risk.player import HumonRiskPlayer, LLMRiskPlayer
+from risk.llm import ChatGPTInterface, GeminiInterface, ClaudeInterface, DeepseekInterface # Import LLM interfaces
 
 REINFORCE = 'reinforce'
 ATTACK = 'attack'
@@ -52,9 +53,22 @@ class GameMaster(object):
             'end_turn': [],
             'end_phase': [],
             'end_game': [],
+            # New callbacks for AI data
+            'ai_thoughts_updated': [],    # Args: (player_name: str, thoughts: str)
+            'new_chat_message': [],       # Args: (chat_data: dict)
+                                          # chat_data example: {"type": "global", "sender": "P1", "message": "Hi"}
+                                          # or {"type": "private", "sender": "P1", "receiver": "P2", "message": "Secret"}
         }
         self.add_end_action_callback(GameMaster.check_player_elimination)
 
+    def add_ai_thoughts_updated_callback(self, callback):
+        self.callbacks['ai_thoughts_updated'].append(callback)
+
+    def add_new_chat_message_callback(self, callback):
+        self.callbacks['new_chat_message'].append(callback)
+
+    def add_attack_declared_callback(self, callback):
+        self.callbacks.setdefault('attack_declared', []).append(callback) # Args: (origin_territory_name, target_territory_name)
     
     ###########################################################################
     ## Internal actions
@@ -109,23 +123,56 @@ class GameMaster(object):
     def add_end_phase_callback(self, callback):
         self.callbacks['end_phase'].append(callback)
 
-    def generate_players(self, number_of_human_players, cli=False):
-        risk.logger.debug("Generating %s human players" % \
-            number_of_human_players)
+    def generate_players(self, player_configurations: list, cli: bool = False):
+        """
+        Generates player objects based on the configurations provided.
+        Args:
+            player_configurations: A list of dictionaries, where each dict contains
+                                   'name' (str) and 'type' (str) for a player.
+                                   Example: [{'name': 'Player 1', 'type': 'Human'},
+                                             {'name': 'Botzilla', 'type': 'ChatGPTInterface'}]
+            cli: Boolean, True if running in command-line mode.
+        """
+        risk.logger.info(f"Generating {len(player_configurations)} players based on configurations...")
+        if len(player_configurations) != self._num_players:
+            risk.logger.warn(f"Number of player configurations ({len(player_configurations)}) "
+                             f"does not match GameMaster's expected num_players ({self._num_players}). "
+                             "This might lead to issues. Adjusting GameMaster's internal count.")
+            self._num_players = len(player_configurations)
 
-        for i in range(number_of_human_players):
-            if cli:
-                self.players.append(HumonRiskPlayer("Human %s" % i))
+        self.players = [] # Clear any existing players
+
+        for i, config in enumerate(player_configurations):
+            player_name = config.get("name", f"Player {i+1}")
+            player_type = config.get("type", "Human") # Default to Human if type is missing
+
+            risk.logger.debug(f"Creating player: {player_name} of type: {player_type}")
+
+            if player_type == "Human":
+                if cli:
+                    self.players.append(HumonRiskPlayer(player_name))
+                else:
+                    # HumonGuiRiskPlayer is defined in risk.graphics.player
+                    # This creates a dependency from core logic to graphics.
+                    # Consider refactoring this using a factory or strategy pattern later if problematic.
+                    from risk.graphics.player import HumonGuiRiskPlayer
+                    self.players.append(HumonGuiRiskPlayer(player_name))
+            elif player_type == "BasicBot":
+                self.players.append(BasicRiskBot(player_name))
+            elif player_type == "ChatGPTInterface":
+                self.players.append(LLMRiskPlayer(player_name, ChatGPTInterface()))
+            elif player_type == "GeminiInterface":
+                self.players.append(LLMRiskPlayer(player_name, GeminiInterface()))
+            elif player_type == "ClaudeInterface":
+                self.players.append(LLMRiskPlayer(player_name, ClaudeInterface()))
+            elif player_type == "DeepseekInterface":
+                self.players.append(LLMRiskPlayer(player_name, DeepseekInterface()))
             else:
-                from risk.graphics import player
-                self.players.append(
-                    risk.graphics.player.HumonGuiRiskPlayer("GHuman %s" % i))
+                risk.logger.error(f"Unknown player type: {player_type} for player {player_name}. Defaulting to BasicBot.")
+                self.players.append(BasicRiskBot(player_name))
 
-        risk.logger.debug("Generating %s bots" % \
-            (self._num_players - number_of_human_players))
+        risk.logger.info(f"Successfully generated {len(self.players)} players.")
 
-        for i in range(self._num_players - number_of_human_players):
-            self.players.append(BasicRiskBot(str(i)))
 
     def _print_available_territories(self):
         territories = self.board.territories()

@@ -1,4 +1,4 @@
-import _thread
+import thread
 import time
 
 import pygame
@@ -98,7 +98,7 @@ def init(game_master):
     debug("initializing graphics library...")
     add_graphic_hooks(game_master)
     debug("attempting to get singleton picasso")
-    picasso = risk.graphics.picasso.get_picasso(width=DEFAULT_WIDTH, 
+    picasso = risk.graphics.picasso.get_picasso(width=DEFAULT_WIDTH,
             height=DEFAULT_HEIGHT, background=DEFAULT_BACKGROUND)
     debug("obtained picasso instance")
     debug("building risk board")
@@ -134,14 +134,14 @@ def add_graphic_hooks(game_master):
 
 def initialize_territories(picasso, game_master):
     datastore = Datastore()
-    for continent, territories in game_master.board.continents.items():
-        for territory_name, territory in territories.items():
+    for continent, territories in game_master.board.continents.iteritems():
+        for territory_name, territory in territories.iteritems():
             coordinate = territory_coordinates[continent][territory_name]
             graphic_asset = build_territory_asset(continent, territory, coordinate[0], coordinate[1])
             army_count_asset = assets.territory.ArmyCountAsset(graphic_asset)
             picasso.add_asset('3_territories', graphic_asset)
             picasso.add_asset('4_army_count', army_count_asset)
-            
+
             datastore.add_entry(territory_name, graphic_asset, 'territories')
     risk.logger.debug("assigning player colours")
     build_player_colour_mapping(game_master.players)
@@ -153,7 +153,7 @@ def initialize_other_graphic_assets(picasso, game_master):
     #        100, 100, game_master)
     #picasso.add_asset('4_current_player', current_player_asset)
     #datastore.add_entry('current_player', current_player_asset)
-    feedback_asset = assets.text.TextAsset(100, 650, 
+    feedback_asset = assets.text.TextAsset(100, 650,
             'choose territory to attack')
     datastore.add_entry('attack_feedback', feedback_asset)
     game_info_asset = assets.gameplay.PlayersAsset(30, 550, game_master)
@@ -176,12 +176,12 @@ def add_state_indicators(picasso, game_master):
         'attack': (pos_x, 600),
         'fortify': (pos_x, 652),
     }
-    for state, coordinate in state_indicators.items():
+    for state, coordinate in state_indicators.iteritems():
         asset = assets.image.ToggleImageAsset(coordinate[0], coordinate[1],
             "assets/art/gui/button_%s_highlight.png" % state)
         datastore.add_entry(state, asset, 'states')
         picasso.add_asset(UI_OVERLAY_LEVEL0, asset)
-   
+
 def add_buttons(picasso):
     datastore = Datastore()
     #next_button = assets.clickable.ClickableAsset(
@@ -193,7 +193,7 @@ def add_buttons(picasso):
     )
     datastore.add_entry('next', next_button, 'buttons')
 
-    for button in list(datastore.get_storage('buttons').values()):
+    for button in datastore.get_storage('buttons').values():
         picasso.add_asset('1_buttons', button)
 
 def add_overlay(picasso):
@@ -228,7 +228,7 @@ def show_current_human_player(game_master):
         asset.set_colour(assets.base.GREY)
 
 def is_human_player(game_master):
-    return isinstance(game_master.current_player(), 
+    return isinstance(game_master.current_player(),
             risk.player.HumonRiskPlayer)
 
 def delay(game_master, *args):
@@ -249,15 +249,15 @@ def update_game_info_panel(*args):
     Datastore().get_entry('game_info').update()
 
 def update_current_phase(game_master, previous, current):
-    for state, asset in Datastore().get_storage('states').items():
+    for state, asset in Datastore().get_storage('states').iteritems():
         asset.set_state(state == current)
 
 def show_bot_player_hint(game_master):
     datastore = Datastore()
     picasso = get_picasso()
     if not datastore.has_entry('bot_player_hint'):
-        hint_asset = assets.text.CentredTextAsset(INFO_PANEL_X, INFO_PANEL_Y, 
-                    INFO_PANEL_WIDTH, INFO_PANEL_HEIGHT, 
+        hint_asset = assets.text.CentredTextAsset(INFO_PANEL_X, INFO_PANEL_Y,
+                    INFO_PANEL_WIDTH, INFO_PANEL_HEIGHT,
                     "AI TAKING TURNS...",
                     bold=True)
         datastore.add_entry('bot_player_hint', hint_asset)
@@ -275,7 +275,7 @@ def pressed_clickables(mouse_pos, storage='buttons'):
     datastore = Datastore()
     storage = datastore.get_storage(storage)
     clicked = []
-    for name, button in storage.items():
+    for name, button in storage.iteritems():
         if button.mouse_hovering(mouse_pos):
             if button.confirmed_click():
                 clicked.append((name, button))

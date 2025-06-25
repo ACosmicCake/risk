@@ -9,7 +9,7 @@ OFF=False
 class ImageAsset(PicassoAsset):
     def __init__(self, x, y, path, scale_x=1.0, scale_y=1.0):
         self.path = path
-        self.surface = pygame.image.load(path).convert_alpha()
+        self.surface = pygame.image.load(path).convert() # Changed convert_alpha to convert
         if scale_x != 1 or scale_y != 1:
             self.surface = pygame.transform.scale(self.surface, 
                 (int(self.surface.get_width() * scale_x),

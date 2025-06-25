@@ -36,7 +36,7 @@ DIALOG_X = 400
 DIALOG_Y = 300
 
 REINFORCE_HINTS = {
-    'initial': 
+    'initial':
 """
                  == REINFORCE ==
 
@@ -52,14 +52,14 @@ ATTACK_HINTS = {
                  == ATTACK ==
 
 Click on your own territory to begin
-attacking! 
+attacking!
 Click on the 'next' button to begin fortifying.
 """,
     'attacking':
 """
              == Choose Target ==
 
-Select an adjacent enemy territory to attack. 
+Select an adjacent enemy territory to attack.
 Click anywhere else to cancel.
 """,
     'failed':
@@ -72,7 +72,7 @@ You've failed the attack! Army reduced to 1...
 """
            == Attack Succeeded ==
 
-Great success! You've captured the enemy 
+Great success! You've captured the enemy
 territory!
 """
 }
@@ -99,11 +99,11 @@ def slider_update(dialog, origin, target):
     datastore = Datastore()
     if not hasattr(dialog, 'show_origin_armies'):
         dialog.show_origin_armies = dialog.add_text(40, 70, 'origin')
-        
+
     if not hasattr(dialog, 'show_target_armies'):
         dialog.show_target_armies = dialog.add_text(240, 70, 'target')
 
-    dialog.show_origin_armies.render_text("origin: %s" % 
+    dialog.show_origin_armies.render_text("origin: %s" %
             (origin.armies - dialog.current))
     dialog.show_target_armies.render_text("target: %s" % dialog.current)
 
@@ -120,8 +120,8 @@ def handle_user_mouse_input(game_master, state_entry):
 
 def get_all_clickables():
     datastore = Datastore()
-    return list(datastore.get_storage('buttons').values()) + \
-           list(datastore.get_storage('territories').values())
+    return datastore.get_storage('buttons').values() + \
+           datastore.get_storage('territories').values()
 
 def disable_all_clickables():
     for clickable in get_all_clickables():
@@ -133,7 +133,7 @@ def enable_all_clickables():
 
 def disable_enemy_territories(player):
     datastore = Datastore()
-    for asset in list(datastore.get_storage('territories').values()):
+    for asset in datastore.get_storage('territories').values():
         if asset.territory.owner != player:
             asset.disabled = True
 
@@ -141,12 +141,12 @@ def enable_adjacent_territories(origin):
     datastore = Datastore()
     assets = datastore.get_storage('territories')
     assets[origin.name].disabled = False
-    for neighbour in list(origin.neighbours.values()):
+    for neighbour in origin.neighbours.values():
         assets[neighbour.name].disabled = False
 
 #def wait_for_mouse_click():
 #    _WAITING_FOR_INPUT = True
-#    
+#
 #    while _WAITING_FOR_INPUT:
 #        event = wait_for_event()
 #        if event.type == pygame.MOUSEBUTTONDOWN:
@@ -185,7 +185,7 @@ def reinforce_phase(player, game_master):
                      player.reserves)
         picasso.add_asset(LAYER, hint_asset)
         event = wait_for_mouse_click()
-        for name, clickable in graphics.pressed_clickables(event.pos, 
+        for name, clickable in graphics.pressed_clickables(event.pos,
                 'territories'):
             if isinstance(clickable, TerritoryAsset):
                 territory = clickable.territory
@@ -225,7 +225,7 @@ def attack_phase(player, game_master):
             if isinstance(clickable, TerritoryAsset):
                 if clickable.territory.owner == player:
                     picasso.remove_asset(LAYER, hint_asset)
-                    attack_choose_target(player, game_master, 
+                    attack_choose_target(player, game_master,
                             clickable)
         for name, clickable in get_clicked_buttons(event.pos):
             if name == 'next':
@@ -261,7 +261,7 @@ def attack_perform_attack(player, game_master, origin, target):
             if origin.armies > 2:
                 attack_success_move_armies(player, game_master, origin, target)
             else:
-                game_master.player_move_armies(player, origin.name, 
+                game_master.player_move_armies(player, origin.name,
                                                 target.name, 1)
         else:
             attack_failed(player, game_master, origin, target)
@@ -273,7 +273,7 @@ def attack_success_move_armies(player, game_master, origin, target):
     picasso = get_picasso()
     hint_asset = build_hint_asset(ATTACK_HINTS['success'])
     picasso.add_asset(LAYER, hint_asset)
-    dialog = BlockingSliderDialogAsset(DIALOG_X, DIALOG_Y, 'Attack Move', 1, 
+    dialog = BlockingSliderDialogAsset(DIALOG_X, DIALOG_Y, 'Attack Move', 1,
             origin.armies, slider_update, [origin, target])
     dialog.add_text(16, 16, "Attack was successful!")
     dialog.add_text(16, 32, "How many armies to move?")
@@ -287,11 +287,11 @@ def attack_success_move_armies(player, game_master, origin, target):
                     number_to_move)
             done = True
         except GameMasterError as e:
-            print(e)
+            print e
             dialog.reset()
         except ValueError:
             # we really shouldn't get a parsing error from numeric dialog
-            raise 
+            raise
     enable_all_clickables()
     picasso.remove_asset(DIALOG_LAYER, dialog)
     picasso.remove_asset(LAYER, hint_asset)
@@ -343,7 +343,7 @@ def fortify_choose_target(player, game_master, origin_asset):
     elif target.owner == player and origin.is_connected(target):
         fortify_choose_armies_to_move(player, game_master, origin, target)
     else:
-        fortify_failed(player, origin, target, 
+        fortify_failed(player, origin, target,
                         TerritoryNotOwnedByPlyer(player))
     origin_asset.force_highlight = False
     origin_asset.disabled = False
@@ -351,7 +351,7 @@ def fortify_choose_target(player, game_master, origin_asset):
 
 def fortify_choose_armies_to_move(player, game_master, origin, target):
     picasso = get_picasso()
-    dialog = BlockingSliderDialogAsset(DIALOG_X, DIALOG_Y, 'Fortify', 0, 
+    dialog = BlockingSliderDialogAsset(DIALOG_X, DIALOG_Y, 'Fortify', 0,
             origin.armies, slider_update, [origin, target])
     dialog.add_text(16, 16, "Fortifying...")
     dialog.add_text(16, 35, "Select amount of armies to move")
@@ -360,7 +360,7 @@ def fortify_choose_armies_to_move(player, game_master, origin, target):
     try:
         number_to_move = dialog.get_result(INPUT_POLL_SLEEP)
         if number_to_move > 0:
-            game_master.player_move_armies(player, origin.name, 
+            game_master.player_move_armies(player, origin.name,
                     target.name, number_to_move)
     except GameMasterError as e:
         fortify_failed(player, origin, target, e)
@@ -370,10 +370,10 @@ def fortify_choose_armies_to_move(player, game_master, origin, target):
 def fortify_failed(player, origin, target, reason):
     picasso = get_picasso()
     expected = {
-        NotConnected: 'The selected territories are not connected!',   
+        NotConnected: 'The selected territories are not connected!',
         TerritoryNotOwnedByPlayer: "You do not own %s!" % target.name,
     }
-    msg = expected[reason.__class__] if reason.__class__ in list(expected.keys()) \
+    msg = expected[reason.__class__] if reason.__class__ in expected.keys() \
             else "Unkonwn reason for failure..."
     dialog = PopupDialogAsset(DIALOG_X, DIALOG_Y, "Fortify Failed!", msg)
     picasso.add_asset(POPUP_DIALOG_LAYER, dialog)

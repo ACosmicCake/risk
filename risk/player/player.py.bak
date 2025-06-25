@@ -27,7 +27,7 @@ class AbstractRiskPlayer(object):
 
     def choose_territory(self, available):
         raise NotImplementedError
-    
+
     def deploy_reserve(self, game_master):
         raise NotImplementedError
 
@@ -39,24 +39,24 @@ class HumonRiskPlayer(AbstractRiskPlayer):
 
     def reinforce(self, game_master):
         while self.reserves > 0:
-            print('player has armies to deploy')
-            print("%s's territories: " % self.name)
-            print("---------------------------------------------------")
-            print(list(game_master.player_territories(self).keys()))
-            risk.printer.display_user_armies(self, 
+            print 'player has armies to deploy'
+            print "%s's territories: " % self.name
+            print "---------------------------------------------------"
+            print game_master.player_territories(self).keys()
+            risk.printer.display_user_armies(self,
                     game_master.player_territories(self))
-            commands.prompt_user(self, game_master, 
+            commands.prompt_user(self, game_master,
                     reinforce_commands, HumonRiskPlayer._no_more_reserves)
     def attack(self, game_master):
-        print("Attack phase, next to enter fortification phase")
+        print "Attack phase, next to enter fortification phase"
         commands.prompt_user(self, game_master, attack_commands)
 
     def fortify(self, game_master):
-        print("Fortification phase, next to end turn")
+        print "Fortification phase, next to end turn"
         commands.prompt_user(self, game_master, fortify_commands)
 
     def choose_territory(self, availables):
-        print("%s's turn..." % self.name)
+        print "%s's turn..." % self.name
         return commands.prompt_choose_territory(availables)
 
     def deploy_reserve(self, game_master, max_deploys=0):
@@ -78,7 +78,7 @@ class HumonRiskPlayer(AbstractRiskPlayer):
         try:
             game_master.player_add_army(self, choice, number_of_deploys)
             return number_of_deploys
-        except (TerritoryNotOwnedByPlayer, NotEnoughReserves, 
+        except (TerritoryNotOwnedByPlayer, NotEnoughReserves,
             NoSuchTerritory) as e:
             risk.logger.error(str(e))
         return _FAILED
@@ -87,19 +87,15 @@ class HumonRiskPlayer(AbstractRiskPlayer):
         origin = game_master.player_territories(self)[origin_name]
         armies_to_move = None
         while armies_to_move < 1 or armies_to_move >= origin.armies:
-            if armies_to_move is not None and (armies_to_move < 1 or armies_to_move >= origin.armies):
-                print("You can't move %s armies!" % armies_to_move)
-            try:
-                armies_to_move = int(input("How many armies will you move? >>> "))
-            except ValueError:
-                print("Invalid input. Please enter a number.")
-                armies_to_move = 0 # or some other default to re-enter loop
+            if armies_to_move < 1 or armies_to_move >= origin.armies:
+                print "You can't move %s armies!" % armies_to_move
+            armies_to_move = input("How many armies will you move? >>> ")
         origin_armies, destination_armies = game_master.player_move_armies(self, origin_name, target_name, int(armies_to_move))
         risk.logger.debug("%s now has: %s armies" %(origin_name, origin_armies))
         risk.logger.debug("%s now has: %s armies" %(target_name, destination_armies))
 
 
-    
+
     @staticmethod
     def _no_more_reserves(player, game_master):
         return player.reserves <= 0

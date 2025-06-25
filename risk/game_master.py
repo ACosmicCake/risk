@@ -214,7 +214,7 @@ class GameMaster(object):
         # A full round completes when player index returns to 0 after having selected next player.
         if self._current_player == 0: # Assuming player 0 is the first player
             self.turn_count += 1
-            risk.logger.info(f"--- Advancing to Turn {self.turn_count} ---")
+            risk.logger.debug(f"--- Advancing to Turn {self.turn_count} ---")
 
 
     def check_player_elimination(self, function, result, args):

@@ -240,5 +240,4 @@ class ArmyCountAsset(PicassoAsset):
         return self.surface
 
     def dirty(self):
-        return self.count != self.territory_asset.territory.armies
-
+        return self.current_army_count != self.territory_asset.territory.armies

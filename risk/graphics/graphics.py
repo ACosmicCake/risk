@@ -5,18 +5,18 @@ import pygame
 
 import risk
 import risk.player
-import risk.graphics
-import risk.graphics.picasso
-import risk.graphics.assets.text
-import risk.graphics.assets.clickable
-import risk.graphics.assets.territory
-import risk.graphics.assets.dialog
-import risk.graphics.assets.image
-import risk.graphics.assets.gameplay
+from risk.graphics import picasso
+from risk.graphics.assets import base
+from risk.graphics.assets import clickable
+from risk.graphics.assets import territory
+from risk.graphics.assets import dialog
+from risk.graphics.assets import image
+from risk.graphics.assets import gameplay
+from risk.graphics.assets import text
+from risk.graphics.assets import ui_panels
 
 from risk.logger import *
 from risk.game_master import UNDEFINED, REINFORCE, ATTACK, FORTIFY
-from risk.graphics import assets
 from risk.graphics.event import wait_for_event, get_events
 from risk.graphics.datastore import Datastore
 from risk.graphics.picasso import get_picasso
@@ -105,7 +105,7 @@ def init(game_master, screen=None): # Add screen parameter with a default
     # This requires picasso.get_picasso to be able to accept a 'screen' argument.
     # For now, this change assumes picasso.get_picasso is adapted or ignores extra kwargs.
     # If screen is None, it operates as before.
-    picasso = risk.graphics.picasso.get_picasso(width=DEFAULT_WIDTH, 
+    picasso = get_picasso(width=DEFAULT_WIDTH, 
             height=DEFAULT_HEIGHT, background=DEFAULT_BACKGROUND, screen=screen)
     debug("obtained picasso instance")
     debug("building risk board")
@@ -121,7 +121,7 @@ def init(game_master, screen=None): # Add screen parameter with a default
 
 def shutdown(*args):
     debug("end game event received! attempting to shutdown picasso...")
-    picasso = risk.graphics.picasso.get_picasso()
+    picasso = get_picasso()
     picasso.end()
     debug("sent picasso shutdown event, fingers crossed...")
 
@@ -189,12 +189,12 @@ def visualize_attack_declaration(origin_name, target_name):
         target_asset = datastore.get_entry(target_name, 'territories')
 
         if origin_asset and hasattr(origin_asset, 'start_flashing'):
-            origin_asset.start_flashing(duration=1.0, color=assets.base.ORANGE) # Flash orange for attacker
+            origin_asset.start_flashing(duration=1.0, color=base.ORANGE) # Flash orange for attacker
         else:
             warn(f"Could not find TerritoryAsset for origin: {origin_name} or it doesn't support flashing.")
 
         if target_asset and hasattr(target_asset, 'start_flashing'):
-            target_asset.start_flashing(duration=1.0, color=assets.base.RED) # Flash red for defender
+            target_asset.start_flashing(duration=1.0, color=base.RED) # Flash red for defender
         else:
             warn(f"Could not find TerritoryAsset for target: {target_name} or it doesn't support flashing.")
 
@@ -213,10 +213,10 @@ def initialize_territories(picasso, game_master):
 
     datastore = Datastore()
     for continent, territories in game_master.board.continents.items():
-        for territory_name, territory in territories.items():
+        for territory_name, territory_obj in territories.items():
             coordinate = territory_coordinates[continent][territory_name]
-            graphic_asset = build_territory_asset(continent, territory, coordinate[0], coordinate[1])
-            army_count_asset = assets.territory.ArmyCountAsset(graphic_asset)
+            graphic_asset = build_territory_asset(continent, territory_obj, coordinate[0], coordinate[1])
+            army_count_asset = territory.ArmyCountAsset(graphic_asset)
             picasso.add_asset('3_territories', graphic_asset)
             picasso.add_asset('4_army_count', army_count_asset)
             
@@ -231,17 +231,17 @@ def initialize_other_graphic_assets(picasso, game_master):
     #        100, 100, game_master)
     #picasso.add_asset('4_current_player', current_player_asset)
     #datastore.add_entry('current_player', current_player_asset)
-    feedback_asset = assets.text.TextAsset(100, 650, 
+    feedback_asset = text.TextAsset(100, 650, 
             'choose territory to attack')
     datastore.add_entry('attack_feedback', feedback_asset)
-    game_info_asset = assets.gameplay.PlayersAsset(30, 550, game_master)
+    game_info_asset = gameplay.PlayersAsset(30, 550, game_master)
     picasso.add_asset(UI_OVERLAY_LEVEL0, game_info_asset)
     datastore.add_entry('game_info', game_info_asset)
     add_state_indicators(picasso, game_master)
-    player_background_asset = assets.base.ColourBlockAsset(
-        1000, 548, 123, 80, assets.base.BLACK)
-    human_player_asset = assets.base.ColourBlockAsset(
-        1002, 550, 119, 76, assets.base.GREY)
+    player_background_asset = base.ColourBlockAsset(
+        1000, 548, 123, 80, base.BLACK)
+    human_player_asset = base.ColourBlockAsset(
+        1002, 550, 119, 76, base.GREY)
     datastore.add_entry('player_colour', human_player_asset)
     picasso.add_asset(UI_OVERLAY_LEVEL0, player_background_asset)
     picasso.add_asset(UI_OVERLAY_LEVEL1, human_player_asset)
@@ -258,7 +258,7 @@ def initialize_other_graphic_assets(picasso, game_master):
     comms_panel_width = thoughts_panel_width
     comms_panel_height = 150
 
-    thoughts_panel = assets.ui_panels.ThoughtsPanel(
+    thoughts_panel = ui_panels.ThoughtsPanel(
         thoughts_panel_x, thoughts_panel_y, thoughts_panel_width, thoughts_panel_height
     )
     datastore.add_entry('thoughts_panel', thoughts_panel)
@@ -279,7 +279,7 @@ def initialize_other_graphic_assets(picasso, game_master):
     # The actual text display part of CommunicationPanel
     # This assumes CommunicationPanel is updated to expose its child display panel
     # Or, we create and manage it here. For simplicity, let's assume comms_panel_display is the main asset.
-    communication_panel_display = assets.ui_panels.CommunicationPanel( # Renaming for clarity
+    communication_panel_display = ui_panels.CommunicationPanel( # Renaming for clarity
          comms_panel_x, comms_panel_y, comms_panel_width, comms_panel_height
     )
     datastore.add_entry('communication_panel', communication_panel_display)
@@ -312,7 +312,7 @@ def add_state_indicators(picasso, game_master):
         'fortify': (pos_x, 652),
     }
     for state, coordinate in state_indicators.items():
-        asset = assets.image.ToggleImageAsset(coordinate[0], coordinate[1],
+        asset = image.ToggleImageAsset(coordinate[0], coordinate[1],
             "assets/art/gui/button_%s_highlight.png" % state)
         datastore.add_entry(state, asset, 'states')
         picasso.add_asset(UI_OVERLAY_LEVEL0, asset)
@@ -321,7 +321,7 @@ def add_buttons(picasso):
     datastore = Datastore()
     #next_button = assets.clickable.ClickableAsset(
     #    1000, 635, 120, 65, 'NEXT')
-    next_button = assets.clickable.ImageButtonAsset(
+    next_button = clickable.ImageButtonAsset(
         1000, 635,
         'assets/art/gui/button_next_up.png',
         'assets/art/gui/button_next_down.png'
@@ -333,14 +333,14 @@ def add_buttons(picasso):
 
 def add_overlay(picasso):
     datastore = Datastore()
-    overlay = assets.image.ImageAsset(0, 0, DEFAULT_OVERLAY)
+    overlay = image.ImageAsset(0, 0, DEFAULT_OVERLAY)
     datastore.add_entry('overlay', overlay)
     picasso.add_asset('0_overlay', overlay)
 
 def show_human_player(game_master):
     layer = 3
     if not hasattr(show_human_player, 'asset'):
-        asset = assets.text.TextAsset(
+        asset = text.TextAsset(
             50, 50, 'Player is taking turn...')
         setattr(show_human_player, 'asset', asset)
     asset = getattr(show_human_player, 'asset')
@@ -358,9 +358,9 @@ def show_current_human_player(game_master):
             asset.set_colour(TerritoryAsset.mapping[player])
         except KeyError:
             error("couldn't find key entry for player: %s" % player.name)
-            asset.set_colour(assets.base.BLACK)
+            asset.set_colour(base.BLACK)
     else:
-        asset.set_colour(assets.base.GREY)
+        asset.set_colour(base.GREY)
 
 def is_human_player(game_master):
     return isinstance(game_master.current_player(), 
@@ -391,7 +391,7 @@ def show_bot_player_hint(game_master):
     datastore = Datastore()
     picasso = get_picasso()
     if not datastore.has_entry('bot_player_hint'):
-        hint_asset = assets.text.CentredTextAsset(INFO_PANEL_X, INFO_PANEL_Y, 
+        hint_asset = text.CentredTextAsset(INFO_PANEL_X, INFO_PANEL_Y, 
                     INFO_PANEL_WIDTH, INFO_PANEL_HEIGHT, 
                     "AI TAKING TURNS...",
                     bold=True)

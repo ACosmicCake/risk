@@ -22,6 +22,19 @@ class RiskBoard(object):
         except KeyError:
             raise NoSuchTerritory(territory_name)
 
+    def get_continent_bonus_values(self):
+        """Returns a dictionary of continent names to their army bonus values."""
+        # Standard Risk continent bonuses
+        return {
+            'asia': 7,
+            'north_america': 5,
+            'europe': 5,
+            'africa': 3,
+            'south_america': 2,
+            'australia': 2,
+            # Add other continents if the map can vary; ensure keys match self.continents keys
+        }
+
 def get_standard_risk_map():
     risk.logger.debug('Generating standard map...')
     board = {

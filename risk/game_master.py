@@ -60,6 +60,8 @@ class GameMaster(object):
                                           # or {"type": "private", "sender": "P1", "receiver": "P2", "message": "Secret"}
         }
         self.add_end_action_callback(GameMaster.check_player_elimination)
+        self.chat_log = [] # Initialize chat log
+        self.turn_count = 1 # Start turn count at 1
 
     def add_ai_thoughts_updated_callback(self, callback):
         self.callbacks['ai_thoughts_updated'].append(callback)
@@ -208,6 +210,12 @@ class GameMaster(object):
     def end_turn(self):
         self.call_end_turn_callbacks()
         self._select_next_player()
+        # Increment turn count when the round of players completes and a new player starts.
+        # A full round completes when player index returns to 0 after having selected next player.
+        if self._current_player == 0: # Assuming player 0 is the first player
+            self.turn_count += 1
+            risk.logger.info(f"--- Advancing to Turn {self.turn_count} ---")
+
 
     def check_player_elimination(self, function, result, args):
         if function == 'player_attack':

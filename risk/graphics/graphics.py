@@ -375,10 +375,14 @@ def check_picasso_liveness(game_master):
         game_master.end_game()
 
 def check_gui_quit_event(game_master):
+    """
+    During a non-human player's turn, this allows the event queue to be
+    pumped, specifically to check for a QUIT event.
+    """
     if not is_human_player(game_master):
-        for event in get_events():
-            if event.type == pygame.QUIT:
-                game_master.end_game()
+        # get_events() will raise UserQuitInput if a QUIT event is found, which
+        # is caught by the main run_game loop to gracefully end the game.
+        get_events()
 
 def update_game_info_panel(*args):
     Datastore().get_entry('game_info').update()
@@ -397,7 +401,7 @@ def show_bot_player_hint(game_master):
                     bold=True)
         datastore.add_entry('bot_player_hint', hint_asset)
     hint_asset = datastore.get_entry('bot_player_hint')
-    if isinstance(game_master.current_player(), risk.ai.bots.BasicRiskBot):
+    if not is_human_player(game_master):
         picasso.add_asset(UI_OVERLAY_LEVEL0, hint_asset)
     else:
         picasso.remove_asset(UI_OVERLAY_LEVEL0, hint_asset)

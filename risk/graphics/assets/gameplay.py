@@ -28,6 +28,12 @@ class PlayersAsset(PicassoAsset):
     # TODO CLEANUP, SRSLY!
     def update(self):
         current_step = 0
+        # Prevent division by zero if there are no players
+        if not self.known_players:
+            self.surface = pygame.Surface((DEFAULT_WIDTH, DEFAULT_HEIGHT),
+                                    pygame.SRCALPHA, 32)
+            return
+
         stride = DEFAULT_HEIGHT / len(self.known_players)
         new_view = pygame.Surface((DEFAULT_WIDTH, DEFAULT_HEIGHT),
                                     pygame.SRCALPHA, 32)

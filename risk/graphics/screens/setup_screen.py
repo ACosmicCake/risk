@@ -32,35 +32,35 @@ class SetupScreen:
         self.ui_elements = {} # Clear previous elements
 
         # Title
-        self.ui_elements['title'] = text_assets.TextAsset(50, 50, "Game Setup", color=WHITE, font_size=48)
+        self.ui_elements['title'] = text_assets.TextAsset(50, 50, "Game Setup", colour=WHITE, size=48)
 
         # Number of players selection
-        self.ui_elements['num_players_label'] = text_assets.TextAsset(50, 120, f"Number of Players: {self.num_players}", color=WHITE)
-        self.ui_elements['num_players_decrease'] = clickable_assets.ClickableAsset(300, 118, 30, 30, "-", text_color=BLACK,_font_size=30, default_color=GREY, highlight_color=WHITE)
-        self.ui_elements['num_players_increase'] = clickable_assets.ClickableAsset(340, 118, 30, 30, "+", text_color=BLACK,_font_size=30, default_color=GREY, highlight_color=WHITE)
+        self.ui_elements['num_players_label'] = text_assets.TextAsset(50, 120, f"Number of Players: {self.num_players}", colour=WHITE)
+        self.ui_elements['num_players_decrease'] = clickable_assets.ClickableAsset(300, 118, 30, 30, "-", text_colour=BLACK, size=30, bg_colour=GREY, highlight_bg=WHITE)
+        self.ui_elements['num_players_increase'] = clickable_assets.ClickableAsset(340, 118, 30, 30, "+", text_colour=BLACK, size=30, bg_colour=GREY, highlight_bg=WHITE)
 
         # Player type selectors
         y_offset = 180
         for i in range(self.num_players):
             player_label = f"player_{i}_label"
             player_type_button = f"player_{i}_type_button"
-            self.ui_elements[player_label] = text_assets.TextAsset(50, y_offset, f"Player {i+1} Type:", color=WHITE)
+            self.ui_elements[player_label] = text_assets.TextAsset(50, y_offset, f"Player {i+1} Type:", colour=WHITE)
             current_type = self.player_configs[i]["type"]
-            self.ui_elements[player_type_button] = clickable_assets.ClickableAsset(250, y_offset -2, 250, 30, current_type, text_color=BLACK, default_color=GREY, highlight_color=WHITE)
+            self.ui_elements[player_type_button] = clickable_assets.ClickableAsset(250, y_offset -2, 250, 30, current_type, text_colour=BLACK, bg_colour=GREY, highlight_bg=WHITE)
 
             # Dropdown options (simplified: shown when active_dropdown == i)
             if self.active_dropdown == i:
                 dropdown_y = y_offset + 35
                 for pt_idx, p_type in enumerate(PLAYER_TYPES):
                     option_key = f"player_{i}_option_{p_type}"
-                    self.ui_elements[option_key] = clickable_assets.ClickableAsset(250, dropdown_y + (pt_idx * 30), 250, 25, p_type, text_color=BLACK, _font_size=24, default_color=WHITE, highlight_color=GREEN)
+                    self.ui_elements[option_key] = clickable_assets.ClickableAsset(250, dropdown_y + (pt_idx * 30), 250, 25, p_type, text_colour=BLACK, size=24, bg_colour=WHITE, highlight_bg=GREEN)
             y_offset += 80 if self.active_dropdown == i else 40 # More space if dropdown is open
             if self.active_dropdown == i: y_offset += len(PLAYER_TYPES) * 30
 
 
         # Start Game Button
-        self.ui_elements['start_button'] = clickable_assets.ClickableAsset(50, y_offset + 50, 200, 50, "Start Game", text_color=BLACK, default_color=GREEN, highlight_color=WHITE)
-        self.ui_elements['quit_button'] = clickable_assets.ClickableAsset(300, y_offset + 50, 200, 50, "Quit", text_color=BLACK, default_color=RED, highlight_color=WHITE)
+        self.ui_elements['start_button'] = clickable_assets.ClickableAsset(50, y_offset + 50, 200, 50, "Start Game", text_colour=BLACK, bg_colour=GREEN, highlight_bg=WHITE)
+        self.ui_elements['quit_button'] = clickable_assets.ClickableAsset(300, y_offset + 50, 200, 50, "Quit", text_colour=BLACK, bg_colour=RED, highlight_bg=WHITE)
 
 
     def handle_event(self, event):
@@ -125,17 +125,9 @@ class SetupScreen:
     def draw(self):
         self.screen.fill(BLACK) # Background
         for element in self.ui_elements.values():
-            if hasattr(element, 'draw'):
-                element.draw(self.screen) # ClickableAsset has its own draw
-            elif isinstance(element, text_assets.TextAsset):
-                # For TextAsset, manually render as Picasso isn't managing it here.
-                # We need to access its text, color, and font properties.
-                # TextAsset itself doesn't store the raw font object after init in a standard way for this.
-                # Using self.font as a general font for setup screen text assets.
-                # This assumes TextAsset stores its text string in 'text' and color in 'colour'.
-                text_surface = self.font.render(element.text, True, element.colour)
-                self.screen.blit(text_surface, (element.x, element.y))
-            # Add more specific draw calls if other asset types are used directly
+            # All our assets are PicassoAssets and have a draw() method that returns a surface,
+            # and a get_coordinate() method for their position.
+            self.screen.blit(element.draw(), element.get_coordinate())
 
         pygame.display.flip()
 
@@ -155,12 +147,9 @@ class SetupScreen:
                     self.next_screen = "quit"
                 self.handle_event(event)
 
-            # Update mouse hover states for clickable assets
-            mouse_pos = pygame.mouse.get_pos()
-            for name, element in self.ui_elements.items():
-                if isinstance(element, clickable_assets.ClickableAsset):
-                    element.set_hover(element.mouse_hovering(mouse_pos))
-
+            # The hover state is checked dynamically within each asset's draw() method,
+            # so we don't need to manage it externally here.
+            
             self.draw()
             pygame.time.Clock().tick(30) # Limit FPS
 
@@ -185,15 +174,3 @@ if __name__ == '__main__':
     else:
         print("\nSetup exited or quit.")
     pygame.quit()
-
-```
-
-**Notes on this initial structure:**
-*   It uses existing `TextAsset` and `ClickableAsset`. `TextAsset` might need a direct `draw(surface)` method if its current `draw` relies on Picasso, or I'll render it manually in `SetupScreen.draw`. For now, I've assumed `element.render()` gives a surface.
-*   The "dropdown" is very basic: clicking the player type button toggles the visibility of a list of clickable player type options below it.
-*   It dynamically creates UI elements based on `self.num_players`.
-*   The `run_loop` method is included, which would be called from `risk.py`.
-*   The `if __name__ == '__main__':` block allows for testing this screen somewhat independently.
-*   LLM interface names are dynamically pulled from `risk.llm.__all__`.
-
-Next, I will modify `risk.py` to call this setup screen before initializing the full game graphics and `GameMaster`. And then, update `GameMaster.generate_players`.

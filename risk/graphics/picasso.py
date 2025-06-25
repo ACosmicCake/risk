@@ -10,12 +10,10 @@ from pygame.locals import *
 
 import risk
 import risk.logger
-import risk.graphics.assets.image
+import risk.errors.input
 
-from risk.graphics.event import pump
+from risk.graphics.event import get_events
 from risk.graphics.assets.base import PicassoAsset
-from risk.graphics.assets.text import TextAsset
-from risk.graphics import assets
 
 MOUSE_CURSOR_LOCATION = 'assets/art/cursor/mickey_mouse.png'
 
@@ -61,6 +59,7 @@ class Picasso(threading.Thread):
         self.ended = False
         self.game_master = None
         
+        from risk.graphics import assets
         self.clock = pygame.time.Clock()
         self.cursor = assets.image.ImageAsset(0, 0, MOUSE_CURSOR_LOCATION)
 
@@ -72,13 +71,15 @@ class Picasso(threading.Thread):
             while not self.ended:
                 # Event handling
                 mouse_pos = pygame.mouse.get_pos() # Get mouse position once per frame
-                for event in pygame.event.get(): # Use pygame.event.get() for full event queue
-                    if event.type == pygame.QUIT:
-                        self.ended = True
-                        # Potentially call game_master.end_game() or a shutdown callback here
-                        # For now, just ending Picasso loop. GameMaster should handle full exit.
-                        break
+                try:
+                    events = get_events()
+                except risk.errors.input.UserQuitInput:
+                    self.ended = True
+                    # Potentially call game_master.end_game() or a shutdown callback here
+                    # For now, just ending Picasso loop. GameMaster should handle full exit.
+                    break
 
+                for event in events:
                     # Pass event to interactive assets/panels
                     # This needs a way to access these specific assets.
                     # Using Datastore is one option if panels are registered there.
@@ -113,7 +114,7 @@ class Picasso(threading.Thread):
                 "Exception in Picasso subsystem run loop! %s" % e)
         finally: # Ensure pygame quits if Picasso thread exits unexpectedly
             if pygame.get_init(): # Check if pygame is still initialized
-                 risk.logger.info("Picasso thread ending, calling pygame.quit()")
+                 risk.logger.debug("Picasso thread ending, calling pygame.quit()")
                  pygame.quit()
 
 
@@ -165,7 +166,8 @@ class Picasso(threading.Thread):
         self.ended = True
 
     def get_fps_asset(self):
-        asset = TextAsset(1000, 16, "%s FPS" % int(self.clock.get_fps()), 
+        from risk.graphics.assets.text import TextAsset
+        asset = TextAsset(1000, 16, "%s FPS" % int(self.clock.get_fps()),
                 (255, 255, 0), 32)
         return asset
 

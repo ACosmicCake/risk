@@ -10,7 +10,7 @@ LINE_HEIGHT_MULTIPLIER = 1.2 # Adjust for line spacing
 
 class ScrollableTextPanel(PicassoAsset):
     def __init__(self, x, y, width, height, background_color=DEFAULT_PANEL_COLOR, text_color=DEFAULT_TEXT_COLOR, font_size=DEFAULT_FONT_SIZE, initial_text=""):
-        super().__init__(x, y) # PicassoAsset takes x, y
+        super().__init__(None, x, y) # PicassoAsset takes surface, x, y
         self.width = width
         self.height = height
         self.background_color = background_color
@@ -156,7 +156,7 @@ class ThoughtsPanel(ScrollableTextPanel):
 
 class CommunicationPanel(PicassoAsset): # More complex, might have tabs
     def __init__(self, x, y, width, height):
-        super().__init__(x,y)
+        super().__init__(None, x, y)
         self.width = width
         self.height = height
         self.surface = pygame.Surface((self.width, self.height))
@@ -247,23 +247,3 @@ if __name__ == '__main__':
         pygame.time.Clock().tick(30)
 
     pygame.quit()
-
-```
-
-**Key features of `ScrollableTextPanel`:**
-*   Inherits from `PicassoAsset`.
-*   Handles text wrapping within its width.
-*   Supports scrolling via a `scroll(dy)` method and `handle_event` for mouse wheel.
-*   `set_text` and `add_text` methods to update content.
-*   `_render_text_to_lines` handles the logic of breaking text into renderable surfaces.
-*   `_update_surface` redraws the visible portion of text onto its internal surface.
-
-**`ThoughtsPanel`:**
-*   A simple subclass of `ScrollableTextPanel`.
-
-**`CommunicationPanel`:**
-*   Currently a very basic placeholder. It internally uses a `ScrollableTextPanel` for global chat.
-*   The tabbing and private chat selection will be more complex and are deferred slightly.
-*   The `draw` method needs refinement based on how Picasso handles nested assets or if children are drawn independently. For now, it's simplified. The `if __name__ == '__main__':` block shows one way to draw it if children are independent.
-
-This file creates the foundational classes. Next, I'll need to integrate them into `risk/graphics/graphics.py` by instantiating them and adding them to Picasso's layers. Also, the `handle_event` logic in `graphics.py` will need to be updated to pass events to these new panels.

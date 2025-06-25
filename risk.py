@@ -119,7 +119,7 @@ if __name__ == '__main__':
         num_players_from_setup, player_configs_from_setup, next_action = setup_screen_instance.run_loop()
 
         if next_action == "quit":
-            risk.logger.info("User quit from setup screen.")
+            risk.logger.debug("User quit from setup screen.")
             pygame.quit()
             sys.exit()
 
@@ -129,36 +129,20 @@ if __name__ == '__main__':
         # This part needs careful integration with how GameMaster is initialized.
 
         game_board = board.generate_empty_board()
-        # GameMaster needs to be initialized *after* setup gives us player configs
-        master = risk.game_master.GameMaster(game_board, settings)
-        # generate_players will need to be updated to use player_configs_from_setup
-        # master.generate_players(num_players_from_setup, player_configs_from_setup, cli=False)
-        # For now, I'll call a modified generate_players later in the plan step.
-
-        # Initialize main game graphics AFTER setup is done
-        import risk.graphics
-        risk.graphics.init(master) # This will use the already created screen if picasso is adapted
-                                   # or picasso might re-create its own screen.
-                                   # Ideally, picasso should take the existing screen.
-                                   # For now, assuming picasso handles this.
-        master.add_end_game_callback(risk.graphics.shutdown)
-
         # Initialize GameMaster with the correct number of players from setup
         master = risk.game_master.GameMaster(game_board, settings, num_players=num_players_from_setup)
 
         # Call the updated generate_players method
         master.generate_players(player_configs_from_setup, cli=False)
 
-        # Assign territories and reserves AFTER players are generated
-        # These were previously in game_setup() or called by it.
-        board.dev_random_assign_owners(master) # Or a more structured territory selection process
-                                               # For now, dev_random_assign_owners includes _assign_player_reserves
+        # Assign territories and reserves AFTER players are generated.
+        # This was previously in game_setup() or called by it.
+        board.dev_random_assign_owners(master)
 
-        # Initialize main game graphics AFTER setup and GameMaster player generation is done
+        # Initialize main game graphics AFTER the GameMaster has been fully configured with players.
         import risk.graphics
         # Picasso might need to be initialized with the existing screen from setup
         # For now, assuming risk.graphics.init() can handle this or adapt.
-        # It might be better if picasso = get_picasso(screen=screen) is possible
         risk.graphics.init(master, screen=screen) # Pass screen to graphics.init
         master.add_end_game_callback(risk.graphics.shutdown)
 

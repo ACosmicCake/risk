@@ -242,4 +242,3 @@ class ArmyCountAsset(PicassoAsset):
     def dirty(self):
         return self.count != self.territory_asset.territory.armies
 
-```

@@ -135,7 +135,7 @@ class GameMaster(object):
                                              {'name': 'Botzilla', 'type': 'ChatGPTInterface'}]
             cli: Boolean, True if running in command-line mode.
         """
-        risk.logger.info(f"Generating {len(player_configurations)} players based on configurations...")
+        risk.logger.debug(f"Generating {len(player_configurations)} players based on configurations...")
         if len(player_configurations) != self._num_players:
             risk.logger.warn(f"Number of player configurations ({len(player_configurations)}) "
                              f"does not match GameMaster's expected num_players ({self._num_players}). "
@@ -173,7 +173,7 @@ class GameMaster(object):
                 risk.logger.error(f"Unknown player type: {player_type} for player {player_name}. Defaulting to BasicBot.")
                 self.players.append(BasicRiskBot(player_name))
 
-        risk.logger.info(f"Successfully generated {len(self.players)} players.")
+        risk.logger.debug(f"Successfully generated {len(self.players)} players.")
 
 
     def _print_available_territories(self):
